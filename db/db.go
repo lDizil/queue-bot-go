@@ -5,11 +5,14 @@ import (
 	"fmt"
 	config "queuebot/config"
 
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func SetUpDBConn(cfg config.Config) (*pgxpool.Pool, error) {
-	databaseUrl := fmt.Sprintf("postgresql://%s:%s@postgres:%s/%s", cfg.DBUser, cfg.DBPass, cfg.DBPort, cfg.DBName)
+	databaseUrl := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", cfg.DBUser, cfg.DBPass, cfg.DBHost, cfg.DBPort, cfg.DBName)
 
 	pool, err := pgxpool.New(context.Background(), databaseUrl)
 
@@ -18,4 +21,18 @@ func SetUpDBConn(cfg config.Config) (*pgxpool.Pool, error) {
 	}
 
 	return pool, nil
+}
+
+func RunMigrations(databaseUrl string) error {
+	m, err := migrate.New("file://migrations", databaseUrl)
+
+	if err != nil {
+		return err
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return err
+	}
+
+	return nil
 }
