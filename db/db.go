@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"fmt"
 	config "queuebot/config"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -11,9 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func SetUpDBConn(cfg config.Config) (*pgxpool.Pool, error) {
-	databaseUrl := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", cfg.DBUser, cfg.DBPass, cfg.DBHost, cfg.DBPort, cfg.DBName)
-
+func SetUpDBConn(cfg config.Config, databaseUrl string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.New(context.Background(), databaseUrl)
 
 	if err != nil {

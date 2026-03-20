@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:latest
+    image: postgres:16-alpine
     container_name: queuebot_db
     environment:
       POSTGRES_USER: ${DB_USER}
@@ -10,6 +10,48 @@ services:
       - "${DB_PORT}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: queuebot_pgadmin
+    ports:
+      - "${PGADMIN_PORT}:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASS}
+
+      GUNICORN_ACCESS_LOGFILE: '/dev/null'
+      GUNICORN_ERROR_LOGFILE: '/dev/null'
+
+      PGADMIN_CONFIG_SERVER_MODE: ${PGADMIN_REQUIRE_LOGIN}
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: ${PGADMIN_REQUIRE_PASS}
+
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+    depends_on:
+      - postgres
+
+  queuebot:
+    container_name: queuebot
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${QUEUEBOT_PORT}:5001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+    - ./.env:/app/.env
 
 volumes:
   postgres_data:
+  pgadmin_data:
