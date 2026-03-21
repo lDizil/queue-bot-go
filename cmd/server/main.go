@@ -25,7 +25,7 @@ func main() {
 
 	databaseUrl := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s?sslmode=disable", cfg.DBUser, cfg.DBPass, cfg.DBHost, cfg.DBPort, cfg.DBName)
 	
-	_, err = db.SetUpDBConn(cfg, databaseUrl)
+	pool, err := db.SetUpDBConn(databaseUrl)
 	if err != nil {
 		log.Fatal("Ошибка подключения к БД:", err)
 	}
@@ -34,6 +34,9 @@ func main() {
 	if err != nil {
 		log.Fatal("Ошибка миграций:", err)
 	}
+	
+	database := db.NewDBRepo(pool)
+	handlers := h.NewBotHandler(database)
 
 	b, err := bot.New(cfg.TelegramToken)
 
@@ -41,7 +44,12 @@ func main() {
 		log.Fatal("Ошибка при создании бота:", err)
 	}
 
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, h.StartHandler)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, handlers.StartHandler)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/queue", bot.MatchTypeExact, handlers.SendQueueMessage)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "Join:", bot.MatchTypePrefix, handlers.JoinQueue)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveFromQueue", bot.MatchTypePrefix, handlers.LeaveQueue)
 
+	log.Println("Бот запущен и готов к работе")
+	
 	b.Start(ctx)
 }

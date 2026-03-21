@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	config "queuebot/config"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -10,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func SetUpDBConn(cfg config.Config, databaseUrl string) (*pgxpool.Pool, error) {
+func SetUpDBConn(databaseUrl string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.New(context.Background(), databaseUrl)
 
 	if err != nil {

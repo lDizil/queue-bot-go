@@ -8,7 +8,11 @@ type Schedule struct {
 	WeekType  string
 	StartTime time.Time
 	EndTime   time.Time
+	Notified5min bool
+    Notified1min bool
+    NotifiedOpen bool
 	ThreadId  int
+	queueMessageID int64
 }
 
 type QueueEntry struct {
