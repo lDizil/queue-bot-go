@@ -1,0 +1,1 @@
+ALTER TABLE schedules ADD COLUMN queue_message_id BIGINT DEFAULT NULL;

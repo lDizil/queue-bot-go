@@ -2,13 +2,14 @@ package config
 
 import (
 	"os"
+	"time"
 
 	"github.com/spf13/viper"
 )
 
 type Config struct {
 	TelegramToken string `mapstructure:"BOT_TOKEN"`
-	ChatId        string `mapstructure:"BOT_CHAT_ID"`
+	ChatId        int `mapstructure:"BOT_CHAT_ID"`
 	AdminsID      string `mapstructure:"AUTHORIZED_USER_ID"`
 
 	DBUser        string `mapstructure:"DB_USER"`
@@ -17,9 +18,10 @@ type Config struct {
 	DBPort        string `mapstructure:"DB_PORT"`
 	DBHost        string `mapstructure:"DB_HOST"`
 
-	TotalSlotsInQueue string `mapstructure:"TOTAL_SLOTS_IN_QUEUE"`
-	AmountOfButtonsInRow string `mapstructure:"AMOUNT_OF_BUTTONS_IN_ROW"`
+	TotalSlotsInQueue int `mapstructure:"TOTAL_SLOTS_IN_QUEUE"`
+	AmountOfButtonsInRow int `mapstructure:"AMOUNT_OF_BUTTONS_IN_ROW"`
 
+	Delay time.Duration `mapstructure:"DELAY"`
 }
 
 func Load() (Config, error) {

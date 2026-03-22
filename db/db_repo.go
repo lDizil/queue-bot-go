@@ -15,7 +15,7 @@ func NewDBRepo(pool *pgxpool.Pool) *DBRepository {
 }
 
 func (db *DBRepository) GetQueue(ctx context.Context, scheduleID int) ([]QueueEntry, error) {
-	rows, err := db.pool.Query(ctx, "SELECT id, user_id, username, schedule_id, position FROM queue_entries WHERE schedule_id=$1", scheduleID)
+	rows, err := db.pool.Query(ctx, "SELECT id, user_id, username, schedule_id, position FROM queue_entries WHERE schedule_id=$1 ORDER BY position", scheduleID)
 		
 	if err != nil {
 		return nil, err
@@ -41,7 +41,7 @@ func(db *DBRepository) GetScheduleByID(ctx context.Context, scheduleID int) (Sch
 	)
 
 	var schedule Schedule
-	err := row.Scan(&schedule.ID, &schedule.DayOfWeek, &schedule.WeekType, &schedule.StartTime, &schedule.EndTime, &schedule.ThreadId, &schedule.Notified5min, &schedule.Notified1min, &schedule.NotifiedOpen, &schedule.queueMessageID)
+	err := row.Scan(&schedule.ID, &schedule.DayOfWeek, &schedule.WeekType, &schedule.StartTime, &schedule.EndTime, &schedule.ThreadId, &schedule.Notified5min, &schedule.Notified1min, &schedule.NotifiedOpen)
 
 	if err != nil {
 		return schedule, err
@@ -66,8 +66,7 @@ func (db *DBRepository) JoinQueue(ctx context.Context, entry QueueEntry) error {
 func (db *DBRepository) LeaveFromQueue(ctx context.Context, userID int64, scheduleID int) error {
 	_, err := db.pool.Exec(ctx,
 		"DELETE FROM queue_entries WHERE user_id=$1 AND schedule_id=$2",
-		userID,
-		scheduleID,
+		userID,	scheduleID,
 	)
 
 	if err != nil {
@@ -77,10 +76,10 @@ func (db *DBRepository) LeaveFromQueue(ctx context.Context, userID int64, schedu
 	return nil
 }
 
-func (db *DBRepository) IsPositionTaken(ctx context.Context, position int) (bool, error) {
+func (db *DBRepository) IsPositionTaken(ctx context.Context, position int, scheduleID int) (bool, error) {
 	row := db.pool.QueryRow(ctx,
-		"SELECT EXISTS (SELECT 1 FROM queue_entries WHERE position=$1)",
-		position,
+		"SELECT EXISTS (SELECT 1 FROM queue_entries WHERE position=$1 AND schedule_id=$2)",
+		position, scheduleID,
 	)
 
 	var taken bool
@@ -95,7 +94,7 @@ func (db *DBRepository) IsPositionTaken(ctx context.Context, position int) (bool
 
 func(db *DBRepository) IsUserInQueue(ctx context.Context, userID int64, scheduleID int) (bool, error) {
 	row := db.pool.QueryRow(ctx,
-		"SELECT EXISTS (SELECT 1 FROM queue_entries WHERE user_id=$1 and schedule_id=$2)",
+		"SELECT EXISTS (SELECT 1 FROM queue_entries WHERE user_id=$1 AND schedule_id=$2)",
 		userID, scheduleID,
 	)
 
