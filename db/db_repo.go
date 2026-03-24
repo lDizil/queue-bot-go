@@ -16,7 +16,7 @@ func NewDBRepo(pool *pgxpool.Pool) *DBRepository {
 
 func (db *DBRepository) GetQueue(ctx context.Context, scheduleID int) ([]QueueEntry, error) {
 	rows, err := db.pool.Query(ctx, "SELECT id, user_id, username, schedule_id, position FROM queue_entries WHERE schedule_id=$1 ORDER BY position", scheduleID)
-		
+
 	if err != nil {
 		return nil, err
 	}
@@ -24,17 +24,17 @@ func (db *DBRepository) GetQueue(ctx context.Context, scheduleID int) ([]QueueEn
 	defer rows.Close()
 
 	var queues []QueueEntry
-	
+
 	for rows.Next() {
 		var entry QueueEntry
-		rows.Scan(&entry.ID, &entry.UserId, &entry.Username, &entry.ScheduleID, &entry.Position)
+		rows.Scan(&entry.ID, &entry.UserID, &entry.Username, &entry.ScheduleID, &entry.Position)
 		queues = append(queues, entry)
 	}
-	
+
 	return queues, nil
 }
 
-func(db *DBRepository) GetScheduleByID(ctx context.Context, scheduleID int) (Schedule, error) {
+func (db *DBRepository) GetScheduleByID(ctx context.Context, scheduleID int) (Schedule, error) {
 	row := db.pool.QueryRow(ctx,
 		"SELECT * FROM schedules WHERE id=$1",
 		scheduleID,
@@ -51,11 +51,11 @@ func(db *DBRepository) GetScheduleByID(ctx context.Context, scheduleID int) (Sch
 }
 
 func (db *DBRepository) JoinQueue(ctx context.Context, entry QueueEntry) error {
-	_, err := db.pool.Exec(ctx, 
+	_, err := db.pool.Exec(ctx,
 		"INSERT INTO queue_entries (user_id, username, schedule_id, position) VALUES ($1, $2, $3, $4)",
-		entry.UserId, entry.Username, entry.ScheduleID, entry.Position,
+		entry.UserID, entry.Username, entry.ScheduleID, entry.Position,
 	)
-	
+
 	if err != nil {
 		return err
 	}
@@ -63,10 +63,31 @@ func (db *DBRepository) JoinQueue(ctx context.Context, entry QueueEntry) error {
 	return nil
 }
 
+func (db *DBRepository) JoinFirstFreeSlot(ctx context.Context, userID int64, username string, scheduleID int, totalSlots int) (int, error) {
+	var position int
+
+	err := db.pool.QueryRow(ctx,
+		`INSERT INTO queue_entries (user_id, username, schedule_id, position)
+		SELECT $1, $2, $3, MIN(free.pos)
+		FROM generate_series(1, $4) AS free(pos)
+		WHERE free.pos NOT IN (
+			SELECT position FROM queue_entries WHERE schedule_id=$3
+		)
+		RETURNING position`,
+		userID, username, scheduleID, totalSlots,
+	).Scan(&position)
+
+	if err != nil {
+		return -1, err
+	}
+
+	return position, nil
+}
+
 func (db *DBRepository) LeaveFromQueue(ctx context.Context, userID int64, scheduleID int) error {
 	_, err := db.pool.Exec(ctx,
 		"DELETE FROM queue_entries WHERE user_id=$1 AND schedule_id=$2",
-		userID,	scheduleID,
+		userID, scheduleID,
 	)
 
 	if err != nil {
@@ -92,7 +113,7 @@ func (db *DBRepository) IsPositionTaken(ctx context.Context, position int, sched
 	return taken, nil
 }
 
-func(db *DBRepository) IsUserInQueue(ctx context.Context, userID int64, scheduleID int) (bool, error) {
+func (db *DBRepository) IsUserInQueue(ctx context.Context, userID int64, scheduleID int) (bool, error) {
 	row := db.pool.QueryRow(ctx,
 		"SELECT EXISTS (SELECT 1 FROM queue_entries WHERE user_id=$1 AND schedule_id=$2)",
 		userID, scheduleID,
@@ -120,39 +141,3 @@ func (db *DBRepository) ClearQueue(ctx context.Context, scheduleID int) error {
 
 	return nil
 }
-
-func (db *DBRepository) SaveMessageID(ctx context.Context, scheduleID int, massageID int64) error {
-	_, err := db.pool.Exec(ctx,
-		"UPDATE schedules SET queue_message_id=$1 WHERE schedule_id=$2",
-		massageID, scheduleID,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// func (db *DBRepository) GetBusySlots(ctx context.Context, scheduleID int) ([]int, error) {
-// 	rows, err := db.pool.Query(ctx,
-// 		"SELECT position FROM queue_entries WHERE schedule_id=$1",
-// 		scheduleID,
-// 	)
-
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	defer rows.Close()
-
-// 	var busySlots []int
-
-// 	for rows.Next() {
-// 		var busySlot int
-// 		rows.Scan(&busySlot)
-// 		busySlots = append(busySlots, busySlot)
-// 	}
-
-// 	return busySlots, nil
-// }

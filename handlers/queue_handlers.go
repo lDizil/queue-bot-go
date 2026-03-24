@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"github.com/jackc/pgx/v5"
 )
 
 type BotHandler struct {
@@ -68,6 +69,26 @@ func (h *BotHandler) parseSlot(ctx context.Context, b *bot.Bot, query *models.Ca
 	}
 
 	return slot, nil
+}
+
+func (h *BotHandler) checkIsUserInQueue(ctx context.Context, b *bot.Bot, userID int64, scheduleID int, query *models.CallbackQuery, username string) (bool, error) {
+	isUserInQueue, err := h.db.IsUserInQueue(ctx, userID, scheduleID)
+	if err != nil {
+		msg := fmt.Sprintf("Ошибка проверки стоит ли пользователь в очереди (пользователь %s): %v", username, err)
+		h.handleError(ctx, b, query.ID, msg)
+		return false, err
+	}
+
+	if isUserInQueue {
+		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			Text:            "Вы уже заняли место в очереди",
+			CallbackQueryID: query.ID,
+		})
+
+		return true, nil
+	}
+
+	return false, nil
 }
 
 // хендлер — вызывается библиотекой по команде /queue
@@ -295,26 +316,35 @@ func (h *BotHandler) updateQueueMessage(ctx context.Context, b *bot.Bot, chatID 
 	return true, nil
 }
 
-func (h *BotHandler) joinToPosition(ctx context.Context, b *bot.Bot, query *models.CallbackQuery, userID int64, username string, scheduleID int, slot int) {
+func (h *BotHandler) JoinToPosition(ctx context.Context, b *bot.Bot, update *models.Update) {
+	query := update.CallbackQuery
+	data := query.Data
 
-	isUserInQueue, err := h.db.IsUserInQueue(ctx, userID, scheduleID)
+	userID := query.From.ID
+	username := query.From.Username
+
+	scheduleID, err := h.parseScheduleID(ctx, b, query, data, username)
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка проверки стоит ли пользователь в очереди (пользователь %s): %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
 
-	if isUserInQueue {
-		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			Text:            "Вы уже заняли место в очереди",
-			CallbackQueryID: query.ID,
-		})
+	slot, err := h.parseSlot(ctx, b, query, data, username)
+	if err != nil {
+		return
+	}
 
+	isInQueue, err := h.checkIsUserInQueue(ctx, b, userID, scheduleID, query, username)
+	
+	if err != nil {
+		return
+	}
+
+	if isInQueue {
 		return
 	}
 
 	entry := db.QueueEntry{
-		UserId:     userID,
+		UserID:     userID,
 		Username:   username,
 		Position:   slot,
 		ScheduleID: scheduleID,
@@ -346,26 +376,6 @@ func (h *BotHandler) joinToPosition(ctx context.Context, b *bot.Bot, query *mode
 
 }
 
-func (h *BotHandler) JoinQueue(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query := update.CallbackQuery
-	data := query.Data
-
-	userID := query.From.ID
-	username := query.From.Username
-
-	scheduleID, err := h.parseScheduleID(ctx, b, query, data, username)
-	if err != nil {
-		return
-	}
-
-	slot, err := h.parseSlot(ctx, b, query, data, username)
-	if err != nil {
-		return
-	}
-
-	h.joinToPosition(ctx, b, query, userID, username, scheduleID, slot)
-}
-
 func (h *BotHandler) JoinClosestFreeSlot(ctx context.Context, b *bot.Bot, update *models.Update) {
 	query := update.CallbackQuery
 	data := query.Data
@@ -377,39 +387,49 @@ func (h *BotHandler) JoinClosestFreeSlot(ctx context.Context, b *bot.Bot, update
 	if err != nil {
 		return
 	}
-
-	queue, err := h.db.GetQueue(ctx, scheduleID)
+	
+	isInQueue, err := h.checkIsUserInQueue(ctx, b, userID, scheduleID, query, username)
+	
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка получения очереди (пользователь %s): %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
 
-	isTaken := map[int]bool{}
-
-	for _, entry := range queue {
-		isTaken[entry.Position] = true
+	if isInQueue {
+		return
 	}
 
-	slot := -1
+	slot, err := h.db.JoinFirstFreeSlot(ctx, userID, username, scheduleID, h.totalSlotsInQueue)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				Text:            "Все места в очереди заняты",
+				CallbackQueryID: query.ID,
+			})
 
-	for i := 1; i <= h.totalSlotsInQueue; i++ {
-		if !isTaken[i] {
-			slot = i
-			break
+			return
+		} else {
+			msg := fmt.Sprintf("Ошибка при попытке занять ближайшее место в очереди (пользователь %s): %v", username, err)
+			h.handleError(ctx, b, query.ID, msg)
+			return
 		}
 	}
 
-	if slot == -1 {
-		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			Text:            "Все места в очереди заняты",
-			CallbackQueryID: query.ID,
-		})
+	msg := query.Message.Message
+	chatID := msg.Chat.ID
 
-		return
+	task := &updateTask{
+		ctx:        ctx,
+		b:          b,
+		chatID:     chatID,
+		scheduleID: scheduleID,
 	}
 
-	h.joinToPosition(ctx, b, query, userID, username, scheduleID, slot)
+	h.updateQueue <- *task
+
+	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		Text:            fmt.Sprintf("Вы успешно заняли %d в очереди\nДа прибудет с вами сила", slot),
+		CallbackQueryID: query.ID,
+	})
 }
 
 func (h *BotHandler) JoinBusySlot(ctx context.Context, b *bot.Bot, update *models.Update) {

@@ -16,7 +16,7 @@ type Schedule struct {
 
 type QueueEntry struct {
 	ID         int
-	UserId     int64
+	UserID     int64
 	Username   string
 	ScheduleID int
 	Position   int

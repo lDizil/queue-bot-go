@@ -6,6 +6,8 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
+    
+      TZ: Europe/Moscow
     ports:
       - "${DB_PORT}:5432"
     volumes:
@@ -24,6 +26,7 @@ services:
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASS}
+      TZ: Europe/Moscow
 
       GUNICORN_ACCESS_LOGFILE: '/dev/null'
       GUNICORN_ERROR_LOGFILE: '/dev/null'
@@ -44,6 +47,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${QUEUEBOT_PORT}:5001"
+    environment:
+      TZ: Europe/Moscow
     depends_on:
       postgres:
         condition: service_healthy
