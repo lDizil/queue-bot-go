@@ -8,13 +8,21 @@ import (
 	"time"
 
 	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 type BotHandler struct {
-	db            *db.DBRepository
+	db *db.DBRepository
+
 	queueMessages map[int]int
-	mu            sync.RWMutex
-	updateQueue   chan updateTask
+	userState     map[int64]string
+	editMessages  map[int64]int
+
+	queueMu sync.RWMutex
+	stateMu sync.RWMutex
+	editMu  sync.RWMutex
+
+	updateQueue chan updateTask
 
 	totalSlotsInQueue  int
 	amountOfSlotsInRow int
@@ -27,6 +35,7 @@ func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay ti
 		updateQueue:        make(chan updateTask, 100),
 		totalSlotsInQueue:  totalSlots,
 		amountOfSlotsInRow: slotsInRow,
+		userState:          make(map[int64]string),
 	}
 
 	go h.updateWorker(delay)
@@ -41,4 +50,21 @@ func (h *BotHandler) handleError(ctx context.Context, b *bot.Bot, callbackID str
 		Text:            "Что-то пошло не так, обратитесь к администратору бота",
 		ShowAlert:       true,
 	})
+}
+
+func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update == nil {
+		return
+	}
+
+	userID := update.Message.From.ID
+
+	h.stateMu.RLock()
+	state := h.userState[userID]
+	h.stateMu.RUnlock()
+
+	switch state {
+	case "awaiting_schedule":
+		h.HandleScheduleInput(ctx, b, update)
+	}
 }

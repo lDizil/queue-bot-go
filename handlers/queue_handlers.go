@@ -88,9 +88,9 @@ func (h *BotHandler) sendQueueMessage(ctx context.Context, b *bot.Bot, chatID in
 		return err
 	}
 
-	h.mu.Lock()
+	h.queueMu.Lock()
 	h.queueMessages[scheduleID] = msg.ID
-	h.mu.Unlock()
+	h.queueMu.Unlock()
 
 	log.Printf("Сообщение очереди (id: %d) отправлено в чат", msg.ID)
 
@@ -127,9 +127,9 @@ func (h *BotHandler) SendQueueAgain(ctx context.Context, b *bot.Bot, update *mod
 		return
 	}
 
-	h.mu.RLock()
+	h.queueMu.RLock()
 	oldMessageID, exists := h.queueMessages[scheduleID]
-	h.mu.RUnlock()
+	h.queueMu.RUnlock()
 
 	if exists {
 		btn := models.InlineKeyboardButton{
@@ -261,9 +261,9 @@ func (h *BotHandler) updateQueueMessage(ctx context.Context, b *bot.Bot, chatID 
 		return false, err
 	}
 
-	h.mu.RLock()
+	h.queueMu.RLock()
 	messageID, exists := h.queueMessages[scheduleID]
-	h.mu.RUnlock()
+	h.queueMu.RUnlock()
 
 	if !exists {
 		log.Println("Очередь закрыта и недоступна для записи")

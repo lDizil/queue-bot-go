@@ -14,6 +14,7 @@ import (
 func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, update *models.Update) {
     msg := update.Message
     username := msg.From.Username
+	userID := msg.From.ID
     chatID := msg.Chat.ID
 
 	schedules, err := h.db.GetAllSchedules(ctx)
@@ -30,6 +31,10 @@ func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, upda
 		ReplyMarkup: markup,
 	})
 
+	h.editMu.RLock() 
+	h.editMessages[userID] = msg.ID
+	h.editMu.RUnlock()
+
 	if err != nil {
 		log.Printf("Ошибка при попытке отправить сообщения для редактирования расписания (пользователь %s). %v", username, err)
 		return
@@ -39,7 +44,7 @@ func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, upda
 }
 
 func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *models.InlineKeyboardMarkup) {
-	text := "Вы вошли в режим редактирования.\n Можете изменить существующие записи или добавить новые\n"
+	text := "Вы вошли в режим редактирования.\nМожете изменить существующие записи или добавить новые.\n"
 
 	var builder strings.Builder
 
@@ -75,9 +80,31 @@ func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *mode
 
 	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
 
+	btn = models.InlineKeyboardButton{
+		Text:         "Закончить редактирование",
+		CallbackData: "CloseEditSchedule",
+	}
+
+	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
+
 	return builder.String(), &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
 }
 
 func (h *BotHandler) AddNewSchedule(ctx *context.Context, b *bot.Bot, update *models.Update) {
+	
+	userID := update.CallbackQuery.From.ID
 
+	h.editMu.Lock()
+	editMessID := h.editMessages[userID]
+	h.editMu.Unlock()
+
+
+}
+
+func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update *models.Update) {
+
+}
+
+func (h *BotHandler) Back(ctx context.Context, b *bot.Bot, update *models.Update) {
+	
 }
