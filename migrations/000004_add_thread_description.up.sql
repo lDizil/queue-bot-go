@@ -1,0 +1,1 @@
+ALTER TABLE schedules ADD COLUMN thread_description TEXT;

@@ -12,6 +12,7 @@ type Schedule struct {
     Notified1min bool
     NotifiedOpen bool
 	ThreadId  int
+	ThreadDescription *string
 }
 
 type QueueEntry struct {

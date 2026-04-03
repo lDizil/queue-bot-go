@@ -2,17 +2,8 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type DBRepository struct {
-	pool *pgxpool.Pool
-}
-
-func NewDBRepo(pool *pgxpool.Pool) *DBRepository {
-	return &DBRepository{pool: pool}
-}
 
 func (db *DBRepository) GetQueue(ctx context.Context, scheduleID int) ([]QueueEntry, error) {
 	rows, err := db.pool.Query(ctx, "SELECT id, user_id, username, schedule_id, position FROM queue_entries WHERE schedule_id=$1 ORDER BY position", scheduleID)
@@ -27,7 +18,12 @@ func (db *DBRepository) GetQueue(ctx context.Context, scheduleID int) ([]QueueEn
 
 	for rows.Next() {
 		var entry QueueEntry
-		rows.Scan(&entry.ID, &entry.UserID, &entry.Username, &entry.ScheduleID, &entry.Position)
+		
+		err := rows.Scan(&entry.ID, &entry.UserID, &entry.Username, &entry.ScheduleID, &entry.Position)
+		if err != nil {
+			return nil, err
+		}
+
 		queues = append(queues, entry)
 	}
 

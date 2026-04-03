@@ -52,6 +52,9 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveFromQueue", bot.MatchTypePrefix, handlers.LeaveQueue)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SendQueueAgain", bot.MatchTypePrefix, handlers.SendQueueAgain)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ActualQueue", bot.MatchTypeExact, handlers.ActualQueueInfo)
+	
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/edit_schedule", bot.MatchTypeExact, handlers.EditScheduleReplyText)
+
 
 	log.Println("Бот запущен и готов к работе")
 	

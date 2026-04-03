@@ -8,51 +8,16 @@ import (
 	"queuebot/db"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"github.com/jackc/pgx/v5"
 )
 
-type BotHandler struct {
-	db            *db.DBRepository
-	queueMessages map[int]int
-	mu            sync.RWMutex
-	updateQueue   chan updateTask
-
-	totalSlotsInQueue  int
-	amountOfSlotsInRow int
-}
-
-func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay time.Duration) *BotHandler {
-	h := &BotHandler{
-		db:                 db,
-		queueMessages:      make(map[int]int),
-		updateQueue:        make(chan updateTask, 100),
-		totalSlotsInQueue:  totalSlots,
-		amountOfSlotsInRow: slotsInRow,
-	}
-
-	go h.updateWorker(delay)
-
-	return h
-}
-
-func (h *BotHandler) handleError(ctx context.Context, b *bot.Bot, callbackID string, msg string) {
-	log.Println(msg)
-	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-		CallbackQueryID: callbackID,
-		Text:            "Что-то пошло не так, обратитесь к модерации",
-		ShowAlert:       true,
-	})
-}
-
 func (h *BotHandler) parseScheduleID(ctx context.Context, b *bot.Bot, query *models.CallbackQuery, data string, username string) (int, error) {
 	scheduleID, err := strconv.Atoi(strings.Split(data, ":")[1])
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка во время преобразования scheduleID в int (пользователь %s): %v", username, err)
+		msg := fmt.Sprintf("Ошибка во время преобразования scheduleID в int (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return -1, err
 	}
@@ -63,7 +28,7 @@ func (h *BotHandler) parseScheduleID(ctx context.Context, b *bot.Bot, query *mod
 func (h *BotHandler) parseSlot(ctx context.Context, b *bot.Bot, query *models.CallbackQuery, data string, username string) (int, error) {
 	slot, err := strconv.Atoi(strings.Split(data, ":")[2])
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка во время преобразования slot в int (пользователь %s): %v", username, err)
+		msg := fmt.Sprintf("Ошибка во время преобразования slot в int (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return -1, err
 	}
@@ -74,7 +39,7 @@ func (h *BotHandler) parseSlot(ctx context.Context, b *bot.Bot, query *models.Ca
 func (h *BotHandler) checkIsUserInQueue(ctx context.Context, b *bot.Bot, userID int64, scheduleID int, query *models.CallbackQuery, username string) (bool, error) {
 	isUserInQueue, err := h.db.IsUserInQueue(ctx, userID, scheduleID)
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка проверки стоит ли пользователь в очереди (пользователь %s): %v", username, err)
+		msg := fmt.Sprintf("Ошибка проверки стоит ли пользователь в очереди (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return false, err
 	}
@@ -189,7 +154,7 @@ func (h *BotHandler) SendQueueAgain(ctx context.Context, b *bot.Bot, update *mod
 	err = h.sendQueueMessage(ctx, b, chatID, scheduleID)
 
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка при повторной отправки очереди (пользователь %s): %v", username, err)
+		msg := fmt.Sprintf("Ошибка при повторной отправки очереди (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
@@ -217,24 +182,25 @@ func (h *BotHandler) RenderQueueMessage(queue []db.QueueEntry, scheduleID int) (
 	text := "Это сообщение - таблица для записи в очередь\nДля выбора места воспользуйтесь кнопками снизу\nУдачной сдачи работы \n\n"
 	builder.Grow(120 + len(queue)*30 + h.totalSlotsInQueue*4)
 
-	builder.Write([]byte(text))
+	builder.WriteString(text)
 
 	if len(queue) == 0 {
-		builder.Write([]byte("Очередь пуста\n\n"))
+		builder.WriteString("Очередь пуста\n\n")
 	} else {
-		builder.Write([]byte("Текущая очередь:\n\n"))
+		builder.WriteString("Текущая очередь:\n\n")
 		for _, entry := range queue {
 			isTaken[entry.Position] = true
 			fmt.Fprintf(&builder, "%d. @%s\n", entry.Position, entry.Username)
 		}
+		builder.WriteString("\nСвободные места: ")
 
-		builder.Write([]byte("\nСвободные места: "))
-
+		free := []string{}
 		for i := 1; i <= h.totalSlotsInQueue; i++ {
 			if !isTaken[i] {
-				fmt.Fprintf(&builder, "%d, ", i)
+				free = append(free, fmt.Sprintf("%d", i))
 			}
 		}
+		builder.WriteString(strings.Join(free, ", "))
 	}
 
 	keyboard := [][]models.InlineKeyboardButton{}
@@ -334,7 +300,7 @@ func (h *BotHandler) JoinToPosition(ctx context.Context, b *bot.Bot, update *mod
 	}
 
 	isInQueue, err := h.checkIsUserInQueue(ctx, b, userID, scheduleID, query, username)
-	
+
 	if err != nil {
 		return
 	}
@@ -352,7 +318,7 @@ func (h *BotHandler) JoinToPosition(ctx context.Context, b *bot.Bot, update *mod
 
 	err = h.db.JoinQueue(ctx, entry)
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка при попытке встать в очередь (пользователь %s): %v", username, err)
+		msg := fmt.Sprintf("Ошибка при попытке встать в очередь (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
@@ -387,9 +353,9 @@ func (h *BotHandler) JoinClosestFreeSlot(ctx context.Context, b *bot.Bot, update
 	if err != nil {
 		return
 	}
-	
+
 	isInQueue, err := h.checkIsUserInQueue(ctx, b, userID, scheduleID, query, username)
-	
+
 	if err != nil {
 		return
 	}
@@ -408,7 +374,7 @@ func (h *BotHandler) JoinClosestFreeSlot(ctx context.Context, b *bot.Bot, update
 
 			return
 		} else {
-			msg := fmt.Sprintf("Ошибка при попытке занять ближайшее место в очереди (пользователь %s): %v", username, err)
+			msg := fmt.Sprintf("Ошибка при попытке занять ближайшее место в очереди (пользователь %s). %v", username, err)
 			h.handleError(ctx, b, query.ID, msg)
 			return
 		}
@@ -451,7 +417,7 @@ func (h *BotHandler) JoinBusySlot(ctx context.Context, b *bot.Bot, update *model
 
 	isUserInQueue, err := h.db.IsUserInQueue(ctx, userID, scheduleID)
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка проверки стоит ли пользователь в очереди (пользователь %s): %v", username, err)
+		msg := fmt.Sprintf("Ошибка проверки стоит ли пользователь в очереди (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
@@ -467,7 +433,7 @@ func (h *BotHandler) JoinBusySlot(ctx context.Context, b *bot.Bot, update *model
 
 	taken, err := h.db.IsPositionTaken(ctx, slot, scheduleID)
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка проверки занята ли позиция (пользователь %s): %v", username, err)
+		msg := fmt.Sprintf("Ошибка проверки занята ли позиция (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
@@ -501,7 +467,7 @@ func (h *BotHandler) LeaveQueue(ctx context.Context, b *bot.Bot, update *models.
 
 	isUserInQueue, err := h.db.IsUserInQueue(ctx, userID, scheduleID)
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка проверки стоит ли пользователь в очереди (пользователь %s): %v", username, err)
+		msg := fmt.Sprintf("Ошибка проверки стоит ли пользователь в очереди (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
@@ -518,7 +484,7 @@ func (h *BotHandler) LeaveQueue(ctx context.Context, b *bot.Bot, update *models.
 	err = h.db.LeaveFromQueue(ctx, userID, scheduleID)
 
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка выхода из очереди (пользователь %s): %v", username, err)
+		msg := fmt.Sprintf("Ошибка выхода из очереди (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return
 	}

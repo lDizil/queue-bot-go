@@ -9,6 +9,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type DBRepository struct {
+	pool *pgxpool.Pool
+}
+
+func NewDBRepo(pool *pgxpool.Pool) *DBRepository {
+	return &DBRepository{pool: pool}
+}
+
 func SetUpDBConn(databaseUrl string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.New(context.Background(), databaseUrl)
 
