@@ -38,7 +38,7 @@ func main() {
 	database := db.NewDBRepo(pool)
 	handlers := h.NewBotHandler(database, cfg.TotalSlotsInQueue, cfg.AmountOfButtonsInRow, cfg.Delay)
 
-	b, err := bot.New(cfg.TelegramToken)
+	b, err := bot.New(cfg.TelegramToken,  bot.WithInitialOffset(-1), bot.WithDefaultHandler(handlers.StateHandler))
 
 	if err != nil {
 		log.Fatal("Ошибка при создании бота:", err)
@@ -48,13 +48,15 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/queue", bot.MatchTypeExact, handlers.SendQueueMessage)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "Join:", bot.MatchTypePrefix, handlers.JoinToPosition)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinBusySlot:", bot.MatchTypePrefix, handlers.JoinBusySlot)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinFirstFreeslot", bot.MatchTypePrefix, handlers.JoinClosestFreeSlot)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveFromQueue", bot.MatchTypePrefix, handlers.LeaveQueue)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SendQueueAgain", bot.MatchTypePrefix, handlers.SendQueueAgain)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinFirstFreeslot", bot.MatchTypeExact, handlers.JoinClosestFreeSlot)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveFromQueue", bot.MatchTypeExact, handlers.LeaveQueue)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SendQueueAgain", bot.MatchTypeExact, handlers.SendQueueAgain)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ActualQueue", bot.MatchTypeExact, handlers.ActualQueueInfo)
 	
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/edit_schedule", bot.MatchTypeExact, handlers.EditScheduleReplyText)
-
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "AddNewSchedule", bot.MatchTypeExact, handlers.AddNewSchedule)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveEditSchedule", bot.MatchTypeExact, handlers.LeaveEditSchedule)
+	
 
 	log.Println("Бот запущен и готов к работе")
 	

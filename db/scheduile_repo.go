@@ -35,7 +35,7 @@ func (db *DBRepository) GetAllSchedules(ctx context.Context) ([]Schedule, error)
 func (db *DBRepository) AddNewScheduleEntry(ctx context.Context, schedule Schedule) error {
 	_, err := db.pool.Exec(ctx, 
 		`INSERT INTO schedules (day_of_week, week_type, start_time, end_time, thread_id, thread_description)
-		VALUES $1, $2, $3, $4, $5, $6`,
+		VALUES ($1, $2, $3, $4, $5, $6)`,
 		schedule.DayOfWeek, schedule.WeekType, schedule.StartTime, schedule.EndTime, schedule.ThreadId, schedule.ThreadDescription,
 	)
 

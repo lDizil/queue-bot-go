@@ -145,7 +145,7 @@ func (h *BotHandler) SendQueueAgain(ctx context.Context, b *bot.Bot, update *mod
 		})
 	} else {
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			Text:            "Очередь закрыта. Не имеет смысла отображать её снова",
+			Text:            "Очередь закрыта. Нет смысла отображать её снова",
 			CallbackQueryID: query.ID,
 		})
 		return

@@ -32,10 +32,11 @@ func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay ti
 	h := &BotHandler{
 		db:                 db,
 		queueMessages:      make(map[int]int),
+		userState:          make(map[int64]string),
+		editMessages:       make(map[int64]int),
 		updateQueue:        make(chan updateTask, 100),
 		totalSlotsInQueue:  totalSlots,
 		amountOfSlotsInRow: slotsInRow,
-		userState:          make(map[int64]string),
 	}
 
 	go h.updateWorker(delay)
@@ -57,12 +58,18 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 		return
 	}
 
+	if update.Message == nil {
+    	return
+	}
+
 	userID := update.Message.From.ID
 
 	h.stateMu.RLock()
 	state := h.userState[userID]
 	h.stateMu.RUnlock()
 
+	log.Printf("StateHandler вызван, state: %s, userID: %d", state, userID)
+	
 	switch state {
 	case "awaiting_schedule":
 		h.HandleScheduleInput(ctx, b, update)
