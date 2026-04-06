@@ -34,7 +34,7 @@ var weekTypeEnToRu = map[string]string{
 	"odd": "нечетная",
 }
 
-var BackBtn = models.InlineKeyboardButton{
+var BackBtnMainMenu = models.InlineKeyboardButton{
 	Text:         "Назад",
-	CallbackData: "Back",
+	CallbackData: "Back:mainmenu",
 }

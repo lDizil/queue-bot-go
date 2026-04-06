@@ -11,7 +11,7 @@ type Schedule struct {
 	Notified5min bool
     Notified1min bool
     NotifiedOpen bool
-	ThreadId  int
+	ThreadID int
 	ThreadDescription *string
 }
 

@@ -56,7 +56,9 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/edit_schedule", bot.MatchTypeExact, handlers.EditScheduleReplyText)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "AddNewSchedule", bot.MatchTypeExact, handlers.AddNewSchedule)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveEditSchedule", bot.MatchTypeExact, handlers.LeaveEditSchedule)
-	
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "Back:", bot.MatchTypePrefix, handlers.Back)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditSchedule:", bot.MatchTypePrefix, handlers.EditScheduleEntry)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "DeleteEntry:", bot.MatchTypePrefix, handlers.DeleteScheduleEntry)
 
 	log.Println("Бот запущен и готов к работе")
 	

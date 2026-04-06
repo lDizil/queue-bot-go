@@ -37,7 +37,7 @@ func (db *DBRepository) GetScheduleByID(ctx context.Context, scheduleID int) (Sc
 	)
 
 	var schedule Schedule
-	err := row.Scan(&schedule.ID, &schedule.DayOfWeek, &schedule.WeekType, &schedule.StartTime, &schedule.EndTime, &schedule.ThreadId, &schedule.Notified5min, &schedule.Notified1min, &schedule.NotifiedOpen)
+	err := row.Scan(&schedule.ID, &schedule.DayOfWeek, &schedule.WeekType, &schedule.StartTime, &schedule.EndTime, &schedule.ThreadID, &schedule.Notified5min, &schedule.Notified1min, &schedule.NotifiedOpen)
 
 	if err != nil {
 		return schedule, err
