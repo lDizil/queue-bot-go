@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"time"
 )
 
 func (db *DBRepository) GetAllSchedules(ctx context.Context) ([]Schedule, error) {
@@ -72,6 +73,50 @@ func (db *DBRepository) DeleteScheduleEntry(ctx context.Context, scheduleID int)
 		scheduleID,
 	)
 
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DBRepository) ChangeWeekType(ctx context.Context, scheduleID int, weekType string) error {
+	_, err := db.pool.Exec(ctx, 
+		`UPDATE schedules
+		SET week_type = $1
+		WHERE id = $2`,
+		weekType, scheduleID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DBRepository) ChangeWeekDay(ctx context.Context, scheduleID int, weekDay string) error {
+	_, err := db.pool.Exec(ctx, 
+		`UPDATE schedules
+		SET day_of_week = $1
+		WHERE id = $2`,
+		weekDay, scheduleID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DBRepository) ChangeStartTime(ctx context.Context, scheduleID int, startTime time.Time) error {
+	_, err := db.pool.Exec(ctx,
+		`UPDATE schedules
+		SET start_time = $1
+		WHERE id = $2`,
+		startTime, scheduleID,
+	)
 	if err != nil {
 		return err
 	}

@@ -59,6 +59,10 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "Back:", bot.MatchTypePrefix, handlers.Back)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditSchedule:", bot.MatchTypePrefix, handlers.EditScheduleEntry)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "DeleteEntry:", bot.MatchTypePrefix, handlers.DeleteScheduleEntry)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditTypeOfWeek:", bot.MatchTypePrefix, handlers.ChangeWeekType)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditDayOfWeek:", bot.MatchTypePrefix, handlers.GenerateChangeWeekDayMenu)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ChWeekDay:", bot.MatchTypePrefix, handlers.ChangeWeekDay)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditTime:", bot.MatchTypePrefix, handlers.EditTime)
 
 	log.Println("Бот запущен и готов к работе")
 	
