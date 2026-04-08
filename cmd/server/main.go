@@ -62,7 +62,9 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditTypeOfWeek:", bot.MatchTypePrefix, handlers.ChangeWeekType)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditDayOfWeek:", bot.MatchTypePrefix, handlers.GenerateChangeWeekDayMenu)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ChWeekDay:", bot.MatchTypePrefix, handlers.ChangeWeekDay)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditTime:", bot.MatchTypePrefix, handlers.EditTime)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditTime:", bot.MatchTypePrefix, handlers.EditTimeMenu)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "HandleTime", bot.MatchTypePrefix, handlers.EditTime)
+
 
 	log.Println("Бот запущен и готов к работе")
 	

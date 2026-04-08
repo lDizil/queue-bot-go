@@ -15,7 +15,7 @@ type BotHandler struct {
 	db *db.DBRepository
 
 	queueMessages map[int]int
-	userState     map[int64]string
+	userState     map[int64]userState
 	editMessages  map[int64]int
 
 	queueMu sync.RWMutex
@@ -28,11 +28,16 @@ type BotHandler struct {
 	amountOfSlotsInRow int
 }
 
+type userState struct {
+	state string
+	scheduleID int
+}
+
 func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay time.Duration) *BotHandler {
 	h := &BotHandler{
 		db:                 db,
 		queueMessages:      make(map[int]int),
-		userState:          make(map[int64]string),
+		userState:          make(map[int64]userState),
 		editMessages:       make(map[int64]int),
 		updateQueue:        make(chan updateTask, 100),
 		totalSlotsInQueue:  totalSlots,
@@ -65,13 +70,17 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 	userID := update.Message.From.ID
 
 	h.stateMu.RLock()
-	state := h.userState[userID]
+	curState := h.userState[userID]
 	h.stateMu.RUnlock()
-
-	log.Printf("StateHandler вызван, state: %s, userID: %d", state, userID)
 	
-	switch state {
+	switch curState.state {
 	case "awaiting_schedule":
 		h.HandleScheduleInput(ctx, b, update)
-	}
+
+	case "edit_start_time":
+		h.HandleNewTime(ctx, b, update)
+
+	case "edit_end_time":
+		h.HandleNewTime(ctx, b, update)
+	}	
 }

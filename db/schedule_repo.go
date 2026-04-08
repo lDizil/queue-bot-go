@@ -117,6 +117,22 @@ func (db *DBRepository) ChangeStartTime(ctx context.Context, scheduleID int, sta
 		WHERE id = $2`,
 		startTime, scheduleID,
 	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DBRepository) ChangeEndTime(ctx context.Context, scheduleID int, endTime time.Time) error {
+	_, err := db.pool.Exec(ctx,
+		`UPDATE schedules
+		SET end_time = $1
+		WHERE id = $2`,
+		endTime, scheduleID,
+	)
+	
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,10 @@
 package handlers
 
-import "github.com/go-telegram/bot/models"
+import (
+	"fmt"
+
+	"github.com/go-telegram/bot/models"
+)
 
 var dayRuToEn = map[string]string{
 	"понедельник": "monday",
@@ -23,23 +27,41 @@ var dayEnToRu = map[string]string{
 }
 
 var weekTypeRuToEn = map[string]string{
-    "чётная":   "even",
-    "четная":   "even",
-    "нечётная": "odd",
-    "нечетная": "odd",
+	"чётная":   "even",
+	"четная":   "even",
+	"нечётная": "odd",
+	"нечетная": "odd",
 }
 
 var weekTypeEnToRu = map[string]string{
-	"even":  "четная",
-	"odd": "нечетная",
+	"even": "четная",
+	"odd":  "нечетная",
 }
 
 var switchWeekType = map[string]string{
 	"even": "odd",
-	"odd": "even",
+	"odd":  "even",
 }
 
 var BackBtnMainMenu = models.InlineKeyboardButton{
 	Text:         "Назад",
 	CallbackData: "Back:mainmenu",
+}
+
+func GetBackBtnEditSch(scheduleID int) models.InlineKeyboardButton {
+	var BackBtnEditSch = models.InlineKeyboardButton{
+		Text:         "Назад",
+		CallbackData: fmt.Sprintf("Back:editschmenu:%d", scheduleID),
+	}
+
+	return BackBtnEditSch
+}
+
+func GetBackBtnEditTime(scheduleID int) models.InlineKeyboardButton {
+	var BackBtnEditSch = models.InlineKeyboardButton{
+		Text:         "Назад",
+		CallbackData: fmt.Sprintf("Back:editschtime:%d", scheduleID),
+	}
+
+	return BackBtnEditSch
 }

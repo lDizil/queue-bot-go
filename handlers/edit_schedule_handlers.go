@@ -13,70 +13,6 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
-func (h *BotHandler) getAllReplyInfo(update *models.Update) (*models.CallbackQuery, string, int64, int64, string, int) {
-	query := update.CallbackQuery
-	data := query.Data
-
-	chatID := query.Message.Message.Chat.ID
-	username := query.From.Username
-	userID := query.From.ID
-
-	replyEditMesID := query.Message.Message.ID
-
-	return query, data, chatID, userID, username, replyEditMesID
-}
-
-func (h *BotHandler) validateEditSession(ctx context.Context, b *bot.Bot, editMesID int, replyEditMesID int, query *models.CallbackQuery, exists bool) bool {
-	if !exists {
-		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			Text:            "Вы не находитесь в режиме редактирования",
-			CallbackQueryID: query.ID,
-		})
-
-		return false
-	}
-
-	if editMesID != replyEditMesID {
-		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			Text:            "Это сообщение редактирования очереди для другого пользователя. Если хотите также изменить расписание, вызовите /edit_schedule",
-			CallbackQueryID: query.ID,
-		})
-
-		return false
-	}
-
-	return true
-}
-
-func (h *BotHandler) EditMesWithError(ctx context.Context, b *bot.Bot, chatID int64, editMesID int, text string) {
-	b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    chatID,
-		Text:      text,
-		MessageID: editMesID,
-		ReplyMarkup: &models.InlineKeyboardMarkup{
-			InlineKeyboard: [][]models.InlineKeyboardButton{{BackBtnMainMenu}},
-		},
-	})
-}
-
-func GetBackBtnEditSch(scheduleID int) models.InlineKeyboardButton {
-	var BackBtnEditSch = models.InlineKeyboardButton{
-		Text:         "Назад",
-		CallbackData: fmt.Sprintf("Back:editschmenu:%d", scheduleID),
-	}
-
-	return BackBtnEditSch
-}
-
-func GetBackBtnEditTime(scheduleID int) models.InlineKeyboardButton {
-	var BackBtnEditSch = models.InlineKeyboardButton{
-		Text:         "Назад",
-		CallbackData: fmt.Sprintf("Back:editschtime:%d", scheduleID),
-	}
-
-	return BackBtnEditSch
-}
-
 func (h *BotHandler) Back(ctx context.Context, b *bot.Bot, update *models.Update) {
 	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
 
@@ -99,7 +35,7 @@ func (h *BotHandler) Back(ctx context.Context, b *bot.Bot, update *models.Update
 		_, markup = h.GenerateEditMessage(schedules)
 	case "editschmenu":
 		scheduleID, err := strconv.Atoi(parts[2])
-		
+
 		if err != nil {
 			msg := fmt.Sprintf("Ошибка преобразования айди записи в число (пользователь %s).\nОшибка: %v", username, err)
 			h.handleError(ctx, b, query.ID, msg)
@@ -117,7 +53,7 @@ func (h *BotHandler) Back(ctx context.Context, b *bot.Bot, update *models.Update
 		text, markup = h.GenerateEditScheduleMenu(schedule)
 	case "editschtime":
 		scheduleID, err := strconv.Atoi(parts[2])
-		
+
 		if err != nil {
 			msg := fmt.Sprintf("Ошибка преобразования айди записи в число (пользователь %s).\nОшибка: %v", username, err)
 			h.handleError(ctx, b, query.ID, msg)
@@ -199,53 +135,6 @@ func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, upda
 	log.Printf("Сообщение для редактирования очереди (id: %d) отправлено в чат", msg.ID)
 }
 
-func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *models.InlineKeyboardMarkup) {
-	text := "Вы вошли в режим редактирования.\nМожете изменить существующие записи или добавить новые.\n"
-
-	var builder strings.Builder
-
-	builder.Grow(120 + len(schedules)*30)
-	builder.WriteString(text)
-
-	keyboard := [][]models.InlineKeyboardButton{}
-
-	if len(schedules) == 0 {
-		builder.WriteString("\nНет записей для редактирования")
-	} else {
-		for _, sch := range schedules {
-			var btn models.InlineKeyboardButton
-			if sch.ThreadDescription == nil {
-				btn = models.InlineKeyboardButton{
-					Text:         fmt.Sprintf("%s | %s | %s - %s | %d", dayEnToRu[strings.ToLower(sch.DayOfWeek)], weekTypeEnToRu[strings.ToLower(sch.WeekType)], sch.StartTime.Format("15:04:05"), sch.EndTime.Format("15:04:05"), sch.ThreadID),
-					CallbackData: fmt.Sprintf("EditSchedule:%d", sch.ID),
-				}
-			} else {
-				btn = models.InlineKeyboardButton{
-					Text:         fmt.Sprintf("%s | %s | %s - %s | %d | %s", dayEnToRu[strings.ToLower(sch.DayOfWeek)], weekTypeEnToRu[strings.ToLower(sch.WeekType)], sch.StartTime.Format("15:04:05"), sch.EndTime.Format("15:04:05"), sch.ThreadID, *sch.ThreadDescription),
-					CallbackData: fmt.Sprintf("EditSchedule:%d", sch.ID),
-				}
-			}
-
-			keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-		}
-	}
-
-	btn := models.InlineKeyboardButton{
-		Text:         "Добавить новую запись",
-		CallbackData: "AddNewSchedule",
-	}
-
-	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-
-	btn = models.InlineKeyboardButton{
-		Text:         "Закончить редактирование",
-		CallbackData: "LeaveEditSchedule",
-	}
-
-	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-
-	return builder.String(), &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
-}
 
 func (h *BotHandler) EditScheduleEntry(ctx context.Context, b *bot.Bot, update *models.Update) {
 	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
@@ -292,59 +181,6 @@ func (h *BotHandler) EditScheduleEntry(ctx context.Context, b *bot.Bot, update *
 	}
 }
 
-func (h *BotHandler) GenerateEditScheduleMenu(sch db.Schedule) (string, *models.InlineKeyboardMarkup) {
-	desc := "(у этой записи его нет)"
-	if sch.ThreadDescription != nil {
-		desc = *sch.ThreadDescription
-	}
-
-	text := fmt.Sprintf(`Вы перешли к редактированию записи в расписании.
-
-День недели: %s
-Время (нач-кон): %s-%s
-Неделя: %s 
-Айди темы чата: %d
-
-Описание: %s`,
-		dayEnToRu[sch.DayOfWeek], sch.StartTime.Format("15:04:05"), sch.EndTime.Format("15:04:05"), weekTypeEnToRu[sch.WeekType], sch.ThreadID, desc)
-
-	keyboard := [][]models.InlineKeyboardButton{}
-	var btn models.InlineKeyboardButton
-
-	btn = models.InlineKeyboardButton{
-		Text:         "Изменить день недели",
-		CallbackData: fmt.Sprintf("EditDayOfWeek:%d:%s", sch.ID, sch.DayOfWeek),
-	}
-	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-
-	btn = models.InlineKeyboardButton{
-		Text:         "Изменить время",
-		CallbackData: fmt.Sprintf("EditTime:%d", sch.ID),
-	}
-	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-
-	btn = models.InlineKeyboardButton{
-		Text:         "Изменить тип недели (сразу меняет по нажатию)",
-		CallbackData: fmt.Sprintf("EditTypeOfWeek:%d:%s", sch.ID, sch.WeekType),
-	}
-	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-
-	btn = models.InlineKeyboardButton{
-		Text:         "Изменить айди темы чата",
-		CallbackData: fmt.Sprintf("EditThreadID:%d", sch.ID),
-	}
-	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-
-	btn = models.InlineKeyboardButton{
-		Text:         "❌ Удалить запись ❌",
-		CallbackData: fmt.Sprintf("DeleteEntry:%d", sch.ID),
-	}
-
-	keyboard = append(keyboard, []models.InlineKeyboardButton{btn}, []models.InlineKeyboardButton{BackBtnMainMenu})
-
-	return text, &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
-}
-
 func (h *BotHandler) LeaveEditSchedule(ctx context.Context, b *bot.Bot, update *models.Update) {
 	query, _, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
 
@@ -388,8 +224,10 @@ func (h *BotHandler) AddNewSchedule(ctx context.Context, b *bot.Bot, update *mod
 		return
 	}
 
+	curState := userState{state: "awaiting_schedule"}
+	
 	h.stateMu.Lock()
-	h.userState[userID] = "awaiting_schedule"
+	h.userState[userID] = curState
 	h.stateMu.Unlock()
 
 	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
@@ -511,43 +349,6 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	log.Printf("Сообщение для редактирования очереди (id: %d) повторно отправлено в чат", msg.ID)
 }
 
-func (h *BotHandler) isValidData(data []string) bool {
-	if len(data) == 0 || len(data) > 6 || len(data) < 5 {
-		return false
-	}
-
-	_, okRu := dayRuToEn[data[0]]
-	_, okEn := dayEnToRu[data[0]]
-
-	if !okRu && !okEn {
-		return false
-	}
-
-	_, okRu = weekTypeRuToEn[data[1]]
-	_, okEn = weekTypeEnToRu[data[1]]
-
-	if !okRu && !okEn {
-		return false
-	}
-
-	_, err := time.Parse("15:04:05", data[2])
-	if err != nil {
-		return false
-	}
-
-	_, err = time.Parse("15:04:05", data[3])
-	if err != nil {
-		return false
-	}
-
-	_, err = strconv.Atoi(data[4])
-	if err != nil {
-		return false
-	}
-
-	return true
-}
-
 func (h *BotHandler) DeleteScheduleEntry(ctx context.Context, b *bot.Bot, update *models.Update) {
 	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
 
@@ -601,320 +402,87 @@ func (h *BotHandler) DeleteScheduleEntry(ctx context.Context, b *bot.Bot, update
 	}
 }
 
-func (h *BotHandler) ReturnToEditSchMenu(ctx context.Context, b *bot.Bot, scheduleID int, username string, query *models.CallbackQuery, chatID int64, editMesID int) error {
-	schedule, err := h.db.GetScheduleEntry(ctx, scheduleID)
-
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка при получении записи (пользователь %s).\nОшибка: %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return err
-	}
-
-	text, markup := h.GenerateEditScheduleMenu(schedule)
-
-	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:      chatID,
-		MessageID:   editMesID,
-		Text:        text,
-		ReplyMarkup: markup,
-	})
-
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка при изменении сообщения редактирования очереди (пользователь %s). %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return err
-	}
-
-	return nil
-}
-
-func (h *BotHandler) ChangeWeekType(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+func (h *BotHandler) HandleNewTime(ctx context.Context, b *bot.Bot, update *models.Update) {
+	_, data, chatID, userID, username, _ := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID := h.editMessages[userID]
 	h.editMu.RUnlock()
 
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
+	data = strings.Trim(data, " ")
 
-	if !isUserCanChange {
-		return
-	}
+	var newTime time.Time
+	var err error
 
-	dataSl := strings.Split(data, ":")
-
-	scheduleID, err := strconv.Atoi(dataSl[1])
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка при преобразовании айди записи в int (пользователь %s).\nОшибка: %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
-	}
-
-	curWeekType := dataSl[2]
-
-	err = h.db.ChangeWeekType(ctx, scheduleID, switchWeekType[curWeekType])
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка изменения типа недели (пользователь %s). %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
-	}
-
-	err = h.ReturnToEditSchMenu(ctx, b, scheduleID, username, query, chatID, editMesID)
-	if err != nil {
-		return
-	}
-}
-
-func (h *BotHandler) GenerateChangeWeekDayMenu(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
-
-	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
-	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
-
-	dataSl := strings.Split(data, ":")
-
-	scheduleID, err := strconv.Atoi(dataSl[1])
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка при преобразовании айди записи в int (пользователь %s).\nОшибка: %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
-	}
-
-	curDayWeek := dataSl[2]
-
-	keyboard := [][]models.InlineKeyboardButton{}
-
-	days := []struct{ key, name string }{
-		{"monday", "Понедельник"},
-		{"tuesday", "Вторник"},
-		{"wednesday", "Среда"},
-		{"thursday", "Четверг"},
-		{"friday", "Пятница"},
-		{"saturday", "Суббота"},
-		{"sunday", "Воскресенье"},
-	}
-
-	for _, day := range days {
-		if curDayWeek == day.key {
-			continue
+	if newTime, err = time.Parse("15:04", data); err != nil {
+		if newTime, err = time.Parse("15:04", data); err != nil {
+			log.Printf("Ошибка при time.Parse (пользователь %s). %v", username, err)
+			text := "Неверный формат данных, пожалуйста повторите ввод.\n\nОжидается время начала: чч:мм:сс или чч:мм"
+			h.EditMesWithError(ctx, b, chatID, editMesID, text)
+			return
 		}
+	}
+	
+	h.stateMu.RLock()
+	curState := h.userState[userID]
+	h.stateMu.RUnlock()
 
-		keyboard = append(keyboard, []models.InlineKeyboardButton{{
-			Text:         day.name,
-			CallbackData: fmt.Sprintf("ChWeekDay:%d:%s", scheduleID, day.key),
-		}})
+	switch curState.state {
+	case "edit_start_time":
+		err = h.db.ChangeStartTime(ctx, curState.scheduleID, newTime)
+	case "edit_end_time":
+		err = h.db.ChangeEndTime(ctx, curState.scheduleID, newTime) 
+	}
+	
+	if err != nil {
+		log.Printf("Ошибка при изменении времени в базе данных (пользователь %s). %v", username, err)
+		text := "Ошибка при изменении времени в базе данных. Повторите попытку или обратитесь к модерации"
+		h.EditMesWithError(ctx, b, chatID, editMesID, text)
+		return
 	}
 
-	BackBtnEditSch := GetBackBtnEditSch(scheduleID)
+	sch, err := h.db.GetScheduleEntry(ctx, curState.scheduleID)
 
-	keyboard = append(keyboard, []models.InlineKeyboardButton{BackBtnEditSch})
+	if err != nil {
+		log.Printf("Ошибка при получении обновлённой записи из базы данных (пользователь %s). %v", username, err)
+		text := "Ошибка при получении обновлённой записи из базы данных. Повторите попытку или обратитесь к модерации"
+		h.EditMesWithError(ctx, b, chatID, editMesID, text)
+		return
+	}
 
-	text := "Выберите день недели на который хотите сменить текущий"
-
+	text, markup := h.GenerateEditScheduleMenu(sch)
+	
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:      chatID,
-		MessageID:   editMesID,
-		Text:        text,
-		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: keyboard},
+		ChatID:    chatID,
+		MessageID: editMesID,
+		Text:      "Выбранное время успешно изменено.\nИнтерфейс для редактирования повторно отправлен в чат.",
 	})
 
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка при изменении сообщения редактирования очереди (пользователь %s). %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
-	}
-}
-
-func (h *BotHandler) ChangeWeekDay(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
-
-	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
-	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
+		log.Printf("Ошибка изменения сообщения со старым меню редактирования (пользователь %s). %v", username, err)
+		text := "Ошибка изменения сообщения со старым меню редактирования. Повторите попытку или обратитесь к модерации"
+		h.EditMesWithError(ctx, b, chatID, editMesID, text)
 		return
 	}
 
-	params := strings.Split(data, ":")
-
-	scheduleID, err := strconv.Atoi(params[1])
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка при преобразовании айди записи в int (пользователь %s).\nОшибка: %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
-	}
-
-	weekDay := params[2]
-
-	err = h.db.ChangeWeekDay(ctx, scheduleID, weekDay)
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка при изменении дня недели у записи (пользователь %s).\nОшибка: %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
-	}
-
-	err = h.ReturnToEditSchMenu(ctx, b, scheduleID, username, query, chatID, editMesID)
-	if err != nil {
-		return
-	}
-}
-
-func (h *BotHandler) GenerateEditTimeMenu(scheduleID int) *models.InlineKeyboardMarkup {
-	keyboard := [][]models.InlineKeyboardButton{}
-
-	btn := models.InlineKeyboardButton{
-		Text: "Время начала",
-		CallbackData: fmt.Sprintf("editStartTime:%d", scheduleID),
-	}
-	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-
-	btn = models.InlineKeyboardButton{
-		Text: "Время конца",
-		CallbackData: fmt.Sprintf("editEndTime:%d", scheduleID),
-	}
-	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-
-	backBtnEditSch := GetBackBtnEditSch(scheduleID)
-
-	keyboard = append(keyboard, []models.InlineKeyboardButton{backBtnEditSch})
-
-	return  &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
-}
-
-func (h *BotHandler) EditTime(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
-
-	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
-	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
-
-	dataSl := strings.Split(data, ":")
-
-	scheduleID, err := strconv.Atoi(dataSl[1])
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка при преобразовании айди записи в int (пользователь %s).\nОшибка: %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
-	}
-
-	text := "Выберите какое время хотите изменить"
-	
-	markup := h.GenerateEditTimeMenu(scheduleID)
-
-	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      chatID,
-		MessageID:   editMesID,
 		Text:        text,
 		ReplyMarkup: markup,
 	})
 
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка при изменении сообщения редактирования очереди (пользователь %s). %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
-	}
-}
-
-func (h *BotHandler) EditStartTime(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
-
-	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
-	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
+		log.Println("Ошибка при отправке нового меню редактирования записи: ", err)
+		text := "Ошибка при отправке нового меню редактирования записи. Повторите попытку или обратитесь к модерации"
+		h.EditMesWithError(ctx, b, chatID, editMesID, text)
+		return 
 	}
 
-	dataSl := strings.Split(data, ":")
-
-	scheduleID, err := strconv.Atoi(dataSl[1])
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка при преобразовании айди записи в int (пользователь %s).\nОшибка: %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
-	}
-
-	text := "Введите в чат новое время начала для этой записи.\nФормат чч-мм-сс\nНапример: 14:30:00 или просто 14:30"
-
-	keyboard := [][]models.InlineKeyboardButton{}
-
-	BackBtnEditTime := GetBackBtnEditTime(scheduleID)
-
-	keyboard = append(keyboard, []models.InlineKeyboardButton{BackBtnEditTime})
+	h.editMu.Lock()
+	h.editMessages[userID] = msg.ID
+	h.editMu.Unlock()
 
 	h.stateMu.Lock()
-	h.userState[userID] = "edit_start_time"
+	delete(h.userState, userID)
 	h.stateMu.Unlock()
-
-	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:      chatID,
-		MessageID:   editMesID,
-		Text:        text,
-		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: keyboard},
-	})
-
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка при изменении сообщения редактирования очереди (пользователь %s). %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
-	}
 }
-
-// func (h *BotHandler) HandleStartTime() (ctx context.Context, b *bot.Bot, update *models.Update) {
-// 	_, data, chatID, userID, username, _ := h.getAllReplyInfo(update)
-
-// 	h.editMu.RLock()
-// 	editMesID, _ := h.editMessages[userID]
-// 	h.editMu.RUnlock()
-
-// 	data = strings.Trim(data, " ")
-	
-// 	var startTime time.Time
-// 	var err error
-	
-// 	if startTime, err = time.Parse("15:04", data); err != nil {
-// 		if startTime, err = time.Parse("15:04", data); err != nil {
-// 			log.Printf("Ошибка при time.Parse (пользователь %s). %v", username, err)
-// 			text := "Неверный формат данных, пожалуйста повторите ввод.\n\nОжидается время начала: чч:мм:сс или чч:мм."
-// 			h.EditMesWithError(ctx, b, chatID, editMesID, text)
-// 			return
-// 		}
-// 	}
-
-// 	if err != nil {
-// 		log.Printf("Ошибка при изменении времени в базе данных (пользователь %s). %v", username, err)
-// 		text := "Ошибка при изменении времени в базе данных. Повторите попытку или обратитесь к модерации"
-// 		h.EditMesWithError(ctx, b, chatID, editMesID, text)
-// 		return
-// 	}
-
-// 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-// 		ChatID:    chatID,
-// 		MessageID: editMesID,
-// 		Text:      "Новая запись успешно добавлена в расписание.\nИнтерфейс для редактирования повторно отправлен в чат.",
-// 	})
-
-// 	if err != nil {
-// 		log.Printf("Ошибка редактирования сообщения со старым интерфейсом редактирования (пользователь %s). %v", username, err)
-// 		return
-// 	}
-// }
