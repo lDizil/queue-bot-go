@@ -26,14 +26,22 @@ type BotHandler struct {
 
 	totalSlotsInQueue  int
 	amountOfSlotsInRow int
+
+	b *bot.Bot
+}
+
+func (h *BotHandler) SetBot(b *bot.Bot) {
+    h.b = b
 }
 
 type userState struct {
 	state string
 	scheduleID int
+	enteredAt  time.Time
+	chatID     int64
 }
 
-func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay time.Duration) *BotHandler {
+func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay time.Duration, timeForExpiredEditSes time.Duration) *BotHandler {
 	h := &BotHandler{
 		db:                 db,
 		queueMessages:      make(map[int]int),
@@ -44,7 +52,7 @@ func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay ti
 		amountOfSlotsInRow: slotsInRow,
 	}
 
-	go h.updateWorker(delay)
+	go h.updateWorker(delay, timeForExpiredEditSes)
 
 	return h
 }
@@ -84,6 +92,10 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 		h.HandleNewTime(ctx, b, update)
 		
 	case "edit_thread_id":
-		h.HandleNewTheadID(ctx, b, update)
+		h.HandleNewThreadID(ctx, b, update)
+
+	case "edit_description":
+		h.HandleNewDescription(ctx, b, update)
 	}
 }
+

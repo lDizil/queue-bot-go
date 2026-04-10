@@ -132,6 +132,12 @@ func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, upda
 	h.editMessages[userID] = msg.ID
 	h.editMu.Unlock()
 
+	newState := userState{enteredAt: time.Now(), chatID: chatID}
+
+	h.stateMu.Lock()
+	h.userState[userID] = newState
+	h.stateMu.Unlock()
+
 	log.Printf("Сообщение для редактирования очереди (id: %d) отправлено в чат", msg.ID)
 }
 
@@ -209,6 +215,10 @@ func (h *BotHandler) LeaveEditSchedule(ctx context.Context, b *bot.Bot, update *
 	h.editMu.Lock()
 	delete(h.editMessages, userID)
 	h.editMu.Unlock()
+
+	h.stateMu.Lock()
+	delete(h.userState, userID)
+	h.stateMu.Unlock()
 }
 
 func (h *BotHandler) AddNewSchedule(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -223,11 +233,11 @@ func (h *BotHandler) AddNewSchedule(ctx context.Context, b *bot.Bot, update *mod
 	if !isUserCanChange {
 		return
 	}
-
-	curState := userState{state: "awaiting_schedule"}
 	
 	h.stateMu.Lock()
-	h.userState[userID] = curState
+	session := h.userState[userID]
+	session.state = "awaiting_schedule"
+	h.userState[userID] = session
 	h.stateMu.Unlock()
 
 	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
@@ -283,7 +293,7 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	ThreadID, _ := strconv.Atoi(newSchData[4])
 
 	var description *string
-	if len(data) == 6 {
+	if len(newSchData) == 6 {
 		description = &newSchData[5]
 	}
 
@@ -348,7 +358,9 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	h.editMu.Unlock()
 
 	h.stateMu.Lock()
-	delete(h.userState, userID)
+	session := h.userState[userID]
+	session.state = ""
+	h.userState[userID] = session
 	h.stateMu.Unlock()
 
 	log.Printf("Сообщение для редактирования очереди (id: %d) повторно отправлено в чат", msg.ID)
@@ -431,7 +443,7 @@ func (h *BotHandler) HandleNewTime(ctx context.Context, b *bot.Bot, update *mode
 	backBtnEditTime := GetBackBtnEditTime(curState.scheduleID)
 
 	if newTime, err = time.Parse("15:04", data); err != nil {
-		if newTime, err = time.Parse("15:04", data); err != nil {
+		if newTime, err = time.Parse("15:04:05", data); err != nil {
 			log.Printf("Ошибка при time.Parse (пользователь %s). %v", username, err)
 			text := "Неверный формат данных, пожалуйста повторите ввод.\n\nОжидается время начала: чч:мм:сс или чч:мм"
 			h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditTime)
@@ -495,11 +507,13 @@ func (h *BotHandler) HandleNewTime(ctx context.Context, b *bot.Bot, update *mode
 	h.editMu.Unlock()
 
 	h.stateMu.Lock()
-	delete(h.userState, userID)
+	session := h.userState[userID]
+	session.state = ""
+	h.userState[userID] = session
 	h.stateMu.Unlock()
 }
 
-func (h *BotHandler) HandleNewTheadID(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *BotHandler) HandleNewThreadID(ctx context.Context, b *bot.Bot, update *models.Update) {
 	message := update.Message
 
 	data := message.Text
@@ -579,6 +593,86 @@ func (h *BotHandler) HandleNewTheadID(ctx context.Context, b *bot.Bot, update *m
 	h.editMu.Unlock()
 
 	h.stateMu.Lock()
-	delete(h.userState, userID)
+	session := h.userState[userID]
+	session.state = ""
+	h.userState[userID] = session
+	h.stateMu.Unlock()
+}
+
+func (h *BotHandler) HandleNewDescription(ctx context.Context, b *bot.Bot, update *models.Update) {
+	message := update.Message
+
+	data := message.Text
+	userID := message.From.ID
+	username := message.From.Username
+	chatID := message.Chat.ID
+
+	h.editMu.RLock()
+	editMesID := h.editMessages[userID]
+	h.editMu.RUnlock()
+
+	description := strings.Trim(data, " ")
+
+	h.stateMu.RLock()
+	curState := h.userState[userID]
+	h.stateMu.RUnlock()
+
+	backBtnEditSch := GetBackBtnEditSch(curState.scheduleID)
+	var err error
+
+	err = h.db.ChangeDescription(ctx, curState.scheduleID, description)
+	
+	if err != nil {
+		log.Printf("Ошибка при изменении описания в базе данных (пользователь %s). %v", username, err)
+		text := "Ошибка при изменении описания в базе данных. Повторите попытку или обратитесь к модерации"
+		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditSch)
+		return
+	}
+
+	sch, err := h.db.GetScheduleEntry(ctx, curState.scheduleID)
+
+	if err != nil {
+		log.Printf("Ошибка при получении обновлённой записи из базы данных (пользователь %s). %v", username, err)
+		text := "Ошибка при получении обновлённой записи из базы данных. Повторите попытку или обратитесь к модерации"
+		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditSch)
+		return
+	}
+
+	text, markup := h.GenerateEditScheduleMenu(sch)
+	
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: editMesID,
+		Text:      "Описание записи успешно изменено.\nИнтерфейс для редактирования повторно отправлен в чат.",
+	})
+
+	if err != nil {
+		log.Printf("Ошибка изменения сообщения со старым меню редактирования (пользователь %s). %v", username, err)
+		text := "Ошибка изменения сообщения со старым меню редактирования. Повторите попытку или обратитесь к модерации"
+		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditSch)
+		return
+	}
+
+	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
+		Text:        text,
+		ReplyMarkup: markup,
+	})
+
+	if err != nil {
+		log.Println("Ошибка при отправке нового меню редактирования записи: ", err)
+		text := "Ошибка при отправке нового меню редактирования записи. Повторите попытку или обратитесь к модерации"
+		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditSch)
+		return 
+	}
+
+	h.editMu.Lock()
+	h.editMessages[userID] = msg.ID
+	h.editMu.Unlock()
+
+	h.stateMu.Lock()
+	session := h.userState[userID]
+	session.state = ""
+	h.userState[userID] = session
 	h.stateMu.Unlock()
 }

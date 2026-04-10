@@ -21,7 +21,8 @@ type Config struct {
 	TotalSlotsInQueue int `mapstructure:"TOTAL_SLOTS_IN_QUEUE"`
 	AmountOfButtonsInRow int `mapstructure:"AMOUNT_OF_BUTTONS_IN_ROW"`
 
-	Delay time.Duration `mapstructure:"DELAY"`
+	DelayUpdateQueue time.Duration `mapstructure:"DELAY_QUEUE"`
+	TimeForExpiredEditSes time.Duration `mapstructure:"EXIRED_SES_TIME"`
 }
 
 func Load() (Config, error) {

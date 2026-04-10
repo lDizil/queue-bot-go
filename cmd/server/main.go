@@ -36,13 +36,15 @@ func main() {
 	}
 	
 	database := db.NewDBRepo(pool)
-	handlers := h.NewBotHandler(database, cfg.TotalSlotsInQueue, cfg.AmountOfButtonsInRow, cfg.Delay)
+	handlers := h.NewBotHandler(database, cfg.TotalSlotsInQueue, cfg.AmountOfButtonsInRow, cfg.DelayUpdateQueue, cfg.TimeForExpiredEditSes)
 
 	b, err := bot.New(cfg.TelegramToken,  bot.WithInitialOffset(-1), bot.WithDefaultHandler(handlers.StateHandler))
 
 	if err != nil {
 		log.Fatal("Ошибка при создании бота:", err)
 	}
+	
+	handlers.SetBot(b)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, handlers.StartHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/queue", bot.MatchTypeExact, handlers.SendQueueMessage)
@@ -65,7 +67,9 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditTime:", bot.MatchTypePrefix, handlers.EditTimeMenu)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "HandleTime", bot.MatchTypePrefix, handlers.EditTime)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditThreadID:", bot.MatchTypePrefix, handlers.EditThreadID)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditDescription:", bot.MatchTypePrefix, handlers.EditDescription)
 
+	
 	log.Println("Бот запущен и готов к работе")
 	
 	b.Start(ctx)

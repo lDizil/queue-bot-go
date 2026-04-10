@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -118,4 +119,41 @@ func (h *BotHandler) ReturnToEditSchMenu(ctx context.Context, b *bot.Bot, schedu
 	}
 
 	return nil
+}
+
+func (h *BotHandler) isExpiredUserEditSes(timeForExpiredEditSes time.Duration) {
+	h.stateMu.RLock()
+    snapshot := make(map[int64]userState, len(h.userState))
+    for k, v := range h.userState {
+        snapshot[k] = v
+    }
+    h.stateMu.RUnlock()
+	
+	for userID, s := range snapshot {
+		if time.Since(s.enteredAt) > timeForExpiredEditSes {
+			h.editMu.RLock()
+			editMesID, _ := h.editMessages[userID]
+			h.editMu.RUnlock()
+
+			_, err := h.b.EditMessageText(context.Background(), &bot.EditMessageTextParams{
+				ChatID:    s.chatID,
+				MessageID: editMesID,
+				Text:      "Сессия редактирования завершена по таймауту",
+			})
+
+			if err != nil {
+				log.Printf("Ошибка завершения сессии редактирования пользователя с id: %d, err: %v", userID, err)
+			} else {
+				log.Printf("Сессия редактирования пользователя с id: %d завершена", userID)
+			}
+
+			h.editMu.Lock()
+			delete(h.editMessages, userID)
+			h.editMu.Unlock()
+
+			h.stateMu.Lock()
+			delete(h.userState, userID)
+			h.stateMu.Unlock()
+		}
+	}
 }

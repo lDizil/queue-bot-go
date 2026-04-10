@@ -15,9 +15,10 @@ type updateTask struct {
 	scheduleID int
 }
 
-func (h *BotHandler) updateWorker(delay time.Duration) {
+func (h *BotHandler) updateWorker(delay time.Duration, timeForExpiredEditSes time.Duration) {
 	ticker := time.NewTicker(delay)
 	pending := map[int]*updateTask{}
+	sessionTicker := time.NewTicker(timeForExpiredEditSes / 3)
 
 	for {
 		select {
@@ -33,6 +34,9 @@ func (h *BotHandler) updateWorker(delay time.Duration) {
 				}
 				delete(pending, scheduleID)
 			}
+		case <-sessionTicker.C:
+			h.isExpiredUserEditSes(timeForExpiredEditSes)
 		}
+
 	}
 }

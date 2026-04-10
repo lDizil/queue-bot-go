@@ -101,7 +101,13 @@ func (h *BotHandler) GenerateEditScheduleMenu(sch db.Schedule) (string, *models.
 		CallbackData: fmt.Sprintf("EditThreadID:%d", sch.ID),
 	}
 	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-
+	
+	btn = models.InlineKeyboardButton{
+		Text:         "Изменить описание",
+		CallbackData: fmt.Sprintf("EditDescription:%d", sch.ID),
+	
+	}
+	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
 	btn = models.InlineKeyboardButton{
 		Text:         "❌ Удалить запись ❌",
 		CallbackData: fmt.Sprintf("DeleteEntry:%d", sch.ID),
