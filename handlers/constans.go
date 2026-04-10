@@ -43,7 +43,7 @@ var switchWeekType = map[string]string{
 	"odd":  "even",
 }
 
-var BackBtnMainMenu = models.InlineKeyboardButton{
+var backBtnMainMenu = models.InlineKeyboardButton{
 	Text:         "Назад",
 	CallbackData: "Back:mainmenu",
 }

@@ -45,13 +45,13 @@ func (h *BotHandler) validateEditSession(ctx context.Context, b *bot.Bot, editMe
 	return true
 }
 
-func (h *BotHandler) EditMesWithError(ctx context.Context, b *bot.Bot, chatID int64, editMesID int, text string) {
+func (h *BotHandler) EditMesWithError(ctx context.Context, b *bot.Bot, chatID int64, editMesID int, text string, backBtn models.InlineKeyboardButton) {
 	b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		Text:      text,
 		MessageID: editMesID,
 		ReplyMarkup: &models.InlineKeyboardMarkup{
-			InlineKeyboard: [][]models.InlineKeyboardButton{{BackBtnMainMenu}},
+			InlineKeyboard: [][]models.InlineKeyboardButton{{backBtn}},
 		},
 	})
 }

@@ -64,7 +64,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ChWeekDay:", bot.MatchTypePrefix, handlers.ChangeWeekDay)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditTime:", bot.MatchTypePrefix, handlers.EditTimeMenu)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "HandleTime", bot.MatchTypePrefix, handlers.EditTime)
-
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditThreadID:", bot.MatchTypePrefix, handlers.EditThreadID)
 
 	log.Println("Бот запущен и готов к работе")
 	

@@ -82,5 +82,8 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 
 	case "edit_end_time":
 		h.HandleNewTime(ctx, b, update)
-	}	
+		
+	case "edit_thread_id":
+		h.HandleNewTheadID(ctx, b, update)
+	}
 }

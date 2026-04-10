@@ -149,9 +149,9 @@ func (h *BotHandler) EditTime(ctx context.Context, b *bot.Bot, update *models.Up
 
 	var curUserState userState
 	
-	if strings.HasPrefix(curState, "EditTimeStart") {
+	if strings.HasPrefix(curState, "HandleTimeStart") {
 		curUserState = userState{state: "edit_start_time", scheduleID: scheduleID}
-	} else {
+	} else if strings.HasPrefix(curState, "HandleTimeEnd") {
 		curUserState = userState{state: "edit_end_time", scheduleID: scheduleID}
 	}
 	
@@ -186,4 +186,51 @@ func (h *BotHandler) EditTime(ctx context.Context, b *bot.Bot, update *models.Up
 		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
+}
+
+func (h *BotHandler) EditThreadID(ctx context.Context, b *bot.Bot, update *models.Update) {
+	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+
+	h.editMu.RLock()
+	editMesID, exists := h.editMessages[userID]
+	h.editMu.RUnlock()
+
+	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
+
+	if !isUserCanChange {
+		return
+	}
+
+	dataSl := strings.Split(data, ":")
+
+	scheduleID, err := strconv.Atoi(dataSl[1])
+	if err != nil {
+		msg := fmt.Sprintf("Ошибка при преобразовании айди записи в int (пользователь %s).\nОшибка: %v", username, err)
+		h.handleError(ctx, b, query.ID, msg)
+		return
+	}
+
+	text := "Напиши в чат новое айди темы чата куда хотите, чтобы бот отправлял очередь.\nФормат: 12327 (просто число).\nНайти его можно в ссылке на вашу тему (последние цифры)"
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   editMesID,
+		Text:        text,
+	})
+
+	if err != nil {
+		msg := fmt.Sprintf("Ошибка при изменении сообщения редактирования очереди (пользователь %s). %v", username, err)
+		h.handleError(ctx, b, query.ID, msg)
+		return
+	}
+
+	var curState userState
+
+	if dataSl[0] == "EditThreadID" {
+		curState = userState{state: "edit_thread_id", scheduleID: scheduleID}
+	}
+
+	h.stateMu.Lock()
+	h.userState[userID] = curState
+	h.stateMu.Unlock()
 }

@@ -139,3 +139,18 @@ func (db *DBRepository) ChangeEndTime(ctx context.Context, scheduleID int, endTi
 
 	return nil
 }
+
+func (db *DBRepository) ChangeThreadID(ctx context.Context, scheduleID int, threadID int) error {
+	_, err := db.pool.Exec(ctx,
+		`UPDATE schedules
+		SET thread_id = $1
+		WHERE id = $2`,
+		threadID, scheduleID,
+	)
+	
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
