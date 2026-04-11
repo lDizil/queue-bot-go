@@ -13,6 +13,7 @@ type Schedule struct {
     NotifiedOpen bool
 	ThreadID int
 	ThreadDescription *string
+	QueueMesID *int
 }
 
 type QueueEntry struct {

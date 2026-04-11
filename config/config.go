@@ -23,6 +23,11 @@ type Config struct {
 
 	DelayUpdateQueue time.Duration `mapstructure:"DELAY_QUEUE"`
 	TimeForExpiredEditSes time.Duration `mapstructure:"EXIRED_SES_TIME"`
+
+	Week1Date string `mapstructure:"WEEK1_DATE"`
+	Week1Type string `mapstructure:"WEEK1_TYPE"`
+
+	SchedulerTickInterval time.Duration `mapstructure:"SCHEDULER_TICK_INTERVAL"`
 }
 
 func Load() (Config, error) {

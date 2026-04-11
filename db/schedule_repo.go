@@ -9,7 +9,7 @@ func (db *DBRepository) GetAllSchedules(ctx context.Context) ([]Schedule, error)
 	schedules := []Schedule{}
 
 	rows, err := db.pool.Query(ctx, 
-		`SELECT id, day_of_week, week_type, start_time, end_time, thread_id, thread_description
+		`SELECT id, day_of_week, week_type, start_time, end_time, thread_id, thread_description, queue_message_id
 		FROM schedules`,
 	)
 
@@ -22,7 +22,7 @@ func (db *DBRepository) GetAllSchedules(ctx context.Context) ([]Schedule, error)
 	for rows.Next() {
 		var schedule Schedule
 		
-		err := rows.Scan(&schedule.ID, &schedule.DayOfWeek, &schedule.WeekType, &schedule.StartTime, &schedule.EndTime, &schedule.ThreadID, &schedule.ThreadDescription)
+		err := rows.Scan(&schedule.ID, &schedule.DayOfWeek, &schedule.WeekType, &schedule.StartTime, &schedule.EndTime, &schedule.ThreadID, &schedule.ThreadDescription, &schedule.QueueMesID)
 		if err != nil {
 			return nil, err
 		}
@@ -35,7 +35,7 @@ func (db *DBRepository) GetAllSchedules(ctx context.Context) ([]Schedule, error)
 
 func (db *DBRepository) GetScheduleEntry(ctx context.Context, scheduleID int) (Schedule, error) {
 	row := db.pool.QueryRow(ctx,
-		`SELECT id, day_of_week, week_type, start_time, end_time, thread_id, thread_description
+		`SELECT id, day_of_week, week_type, start_time, end_time, thread_id, thread_description, queue_message_id
 		FROM schedules
 		WHERE id = $1`,
 		scheduleID,
@@ -43,7 +43,7 @@ func (db *DBRepository) GetScheduleEntry(ctx context.Context, scheduleID int) (S
 
 	schedule := Schedule{}
 
-	err := row.Scan(&schedule.ID, &schedule.DayOfWeek, &schedule.WeekType, &schedule.StartTime, &schedule.EndTime, &schedule.ThreadID, &schedule.ThreadDescription)
+	err := row.Scan(&schedule.ID, &schedule.DayOfWeek, &schedule.WeekType, &schedule.StartTime, &schedule.EndTime, &schedule.ThreadID, &schedule.ThreadDescription, &schedule.QueueMesID)
 
 	if err != nil {
 		return schedule, err
@@ -69,6 +69,36 @@ func (db *DBRepository) AddNewScheduleEntry(ctx context.Context, schedule Schedu
 func (db *DBRepository) DeleteScheduleEntry(ctx context.Context, scheduleID int) error {
 	_, err := db.pool.Exec(ctx,
 		`DELETE FROM schedules
+		WHERE id = $1`,
+		scheduleID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+ 
+func (db *DBRepository) SetQueueMessageID(ctx context.Context, scheduleID int, messageID int) error {
+	_, err := db.pool.Exec(ctx, 
+		`UPDATE schedules
+		SET queue_message_id = $1
+		WHERE id = $2`,
+		messageID, scheduleID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DBRepository) ClearQueueMessageID(ctx context.Context, scheduleID int) error {
+	_, err := db.pool.Exec(ctx, 
+		`UPDATE schedules
+		SET queue_message_id = NULL
 		WHERE id = $1`,
 		scheduleID,
 	)
@@ -168,4 +198,92 @@ func (db *DBRepository) ChangeDescription(ctx context.Context, scheduleID int, d
 	}
 
 	return nil
+}
+
+func (db *DBRepository) ResetNotifications(ctx context.Context, scheduleID int) error {
+	_, err := db.pool.Exec(ctx,
+		`UPDATE schedules
+		SET notified_5min = false,  notified_1min = false, notified_open = false
+		WHERE id = $1`,
+		scheduleID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DBRepository) SetNotified5min(ctx context.Context, scheduleID int) error {
+	_, err := db.pool.Exec(ctx,
+		`UPDATE schedules
+		SET notified_5min = true
+		WHERE id = $1`,
+		scheduleID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DBRepository) SetNotified1min(ctx context.Context, scheduleID int) error {
+	_, err := db.pool.Exec(ctx,
+		`UPDATE schedules
+		SET notified_1min = true
+		WHERE id = $1`,
+		scheduleID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DBRepository) SetNotifiedOpen(ctx context.Context, scheduleID int) error {
+	_, err := db.pool.Exec(ctx,
+		`UPDATE schedules
+		SET notified_open = true
+		WHERE id = $1`,
+		scheduleID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DBRepository) GetAllSchedulesWithNotifications(ctx context.Context) ([]Schedule, error) {
+	schedules := []Schedule{}
+
+	rows, err := db.pool.Query(ctx, 
+		`SELECT id, day_of_week, week_type, start_time, end_time, thread_id, thread_description, queue_message_id, notified_5min, notified_1min, notified_open
+		FROM schedules`,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var schedule Schedule
+		
+		err := rows.Scan(&schedule.ID, &schedule.DayOfWeek, &schedule.WeekType, &schedule.StartTime, &schedule.EndTime, &schedule.ThreadID, &schedule.ThreadDescription, &schedule.QueueMesID, &schedule.Notified5min, &schedule.Notified1min, &schedule.NotifiedOpen)
+		if err != nil {
+			return nil, err
+		}
+
+		schedules = append(schedules, schedule)
+	}
+
+	return schedules, nil
 }
