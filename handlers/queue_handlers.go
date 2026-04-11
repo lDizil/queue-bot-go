@@ -14,34 +14,42 @@ import (
 
 // хендлер — вызывается библиотекой по команде /queue
 func (h *BotHandler) SendQueueMessage(ctx context.Context, b *bot.Bot, update *models.Update) {
+	username := update.Message.From.Username
+
 	scheduleID := 2
-	_ = h.sendQueueMessage(ctx, b, update.Message.Chat.ID, scheduleID)
+
+	_, err := h.sendQueueMessage(ctx, b, update.Message.Chat.ID, scheduleID, 0, false)
+	if err != nil {
+		log.Printf("Ошибка при повторной отправки очереди (пользователь %s). %v", username, err)
+		return
+	}
 }
 
 // внутренний метод — принимает scheduleID, вызывается из любого места
-func (h *BotHandler) sendQueueMessage(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int) error {
+func (h *BotHandler) sendQueueMessage(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int, threadID int, isOpen bool) (int, error) {
 	if h.totalSlotsInQueue == 0 || h.amountOfSlotsInRow == 0 {
 		log.Println("Не заданы переменные окружения для настройки очереди")
-		return errors.New("не заданы переменные окружения для настройки очереди")
+		return 0, errors.New("не заданы переменные окружения для настройки очереди")
 	}
 
 	queue, err := h.db.GetQueue(ctx, scheduleID)
 	if err != nil {
 		log.Println("Ошибка получения очереди")
-		return err
+		return 0, err
 	}
 
-	text, markup := h.RenderQueueMessage(queue, scheduleID)
+	text, markup := h.RenderQueueMessage(queue, scheduleID, isOpen)
 
 	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ReplyMarkup: markup,
+		ChatID:          chatID,
+		MessageThreadID: threadID,
+		Text:            text,
+		ReplyMarkup:     markup,
 	})
 
 	if err != nil {
 		log.Println("Ошибка при отправке очереди в чат: ", err)
-		return err
+		return 0, err
 	}
 
 	h.queueMu.Lock()
@@ -50,7 +58,7 @@ func (h *BotHandler) sendQueueMessage(ctx context.Context, b *bot.Bot, chatID in
 
 	log.Printf("Сообщение очереди (id: %d) отправлено в чат", msg.ID)
 
-	return nil
+	return msg.ID, nil
 }
 
 func (h *BotHandler) ActualQueueInfo(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -107,7 +115,15 @@ func (h *BotHandler) SendQueueAgain(ctx context.Context, b *bot.Bot, update *mod
 		return
 	}
 
-	err = h.sendQueueMessage(ctx, b, chatID, scheduleID)
+	schedule, err := h.db.GetScheduleEntry(ctx, scheduleID)
+	if err != nil {
+		msg := fmt.Sprintf("Ошибка получения расписания (пользователь %s). %v", username, err)
+		h.handleError(ctx, b, query.ID, msg)
+		return
+	}
+
+	isOpen := isQueueOpen(schedule)
+	_, err = h.sendQueueMessage(ctx, b, chatID, scheduleID, schedule.ThreadID, isOpen)
 
 	if err != nil {
 		msg := fmt.Sprintf("Ошибка при повторной отправки очереди (пользователь %s). %v", username, err)
@@ -121,7 +137,7 @@ func (h *BotHandler) SendQueueAgain(ctx context.Context, b *bot.Bot, update *mod
 	})
 }
 
-func (h *BotHandler) RenderQueueMessage(queue []db.QueueEntry, scheduleID int) (string, *models.InlineKeyboardMarkup) {
+func (h *BotHandler) RenderQueueMessage(queue []db.QueueEntry, scheduleID int, isOpen bool) (string, *models.InlineKeyboardMarkup) {
 	taken := make(map[int]db.QueueEntry, h.totalSlotsInQueue)
 	isTaken := map[int]bool{}
 
@@ -204,6 +220,14 @@ func (h *BotHandler) RenderQueueMessage(queue []db.QueueEntry, scheduleID int) (
 		CallbackData: fmt.Sprintf("SendQueueAgain:%d", scheduleID),
 	}
 
+	var status string
+    if isOpen {
+        status = "\n\n🟢 Очередь открыта 🟢"
+    } else {
+        status = "\n\n🔴 Очередь закрыта 🔴"
+    }
+	builder.WriteString(status)
+	
 	keyboard = append(keyboard, []models.InlineKeyboardButton{btnJoinQueue}, []models.InlineKeyboardButton{btnLeaveQueue}, []models.InlineKeyboardButton{btnSendQueueAgain})
 
 	return builder.String(), &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
@@ -226,7 +250,7 @@ func (h *BotHandler) updateQueueMessage(ctx context.Context, b *bot.Bot, chatID 
 		return false, nil
 	}
 
-	text, markup := h.RenderQueueMessage(queue, scheduleID)
+	text, markup := h.RenderQueueMessage(queue, scheduleID, true)
 
 	b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:      chatID,

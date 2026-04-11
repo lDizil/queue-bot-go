@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"queuebot/db"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -50,4 +52,16 @@ func (h *BotHandler) checkIsUserInQueue(ctx context.Context, b *bot.Bot, userID 
 	}
 
 	return false, nil
+}
+
+func isQueueOpen(schedule db.Schedule) bool {
+	moscow, _ := time.LoadLocation("Europe/Moscow")
+	now := time.Now().In(moscow)
+
+	start := time.Date(now.Year(), now.Month(), now.Day(),
+		schedule.StartTime.Hour(), schedule.StartTime.Minute(), 0, 0, moscow)
+	end := time.Date(now.Year(), now.Month(), now.Day(),
+		schedule.EndTime.Hour(), schedule.EndTime.Minute(), 0, 0, moscow)
+
+	return now.After(start) && now.Before(end)
 }

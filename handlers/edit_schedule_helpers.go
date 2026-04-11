@@ -11,18 +11,7 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
-func (h *BotHandler) getAllReplyInfo(update *models.Update) (*models.CallbackQuery, string, int64, int64, string, int) {
-	query := update.CallbackQuery
-	data := query.Data
 
-	chatID := query.Message.Message.Chat.ID
-	username := query.From.Username
-	userID := query.From.ID
-
-	replyEditMesID := query.Message.Message.ID
-
-	return query, data, chatID, userID, username, replyEditMesID
-}
 
 func (h *BotHandler) validateEditSession(ctx context.Context, b *bot.Bot, editMesID int, replyEditMesID int, query *models.CallbackQuery, exists bool) bool {
 	if !exists {

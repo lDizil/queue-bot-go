@@ -99,3 +99,15 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 	}
 }
 
+func (h *BotHandler) getAllReplyInfo(update *models.Update) (*models.CallbackQuery, string, int64, int64, string, int) {
+	query := update.CallbackQuery
+	data := query.Data
+
+	chatID := query.Message.Message.Chat.ID
+	username := query.From.Username
+	userID := query.From.ID
+
+	replyEditMesID := query.Message.Message.ID
+
+	return query, data, chatID, userID, username, replyEditMesID
+}
