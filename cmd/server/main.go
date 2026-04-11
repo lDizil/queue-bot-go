@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
-	h "queuebot/handlers"
 	c "queuebot/config"
 	db "queuebot/db"
+	h "queuebot/handlers"
+	s "queuebot/scheduler"
 
 	"github.com/go-telegram/bot"
 )
@@ -24,7 +26,7 @@ func main() {
 	}
 
 	databaseUrl := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s?sslmode=disable", cfg.DBUser, cfg.DBPass, cfg.DBHost, cfg.DBPort, cfg.DBName)
-	
+
 	pool, err := db.SetUpDBConn(databaseUrl)
 	if err != nil {
 		log.Fatal("Ошибка подключения к БД:", err)
@@ -34,17 +36,35 @@ func main() {
 	if err != nil {
 		log.Fatal("Ошибка миграций:", err)
 	}
-	
+
 	database := db.NewDBRepo(pool)
 	handlers := h.NewBotHandler(database, cfg.TotalSlotsInQueue, cfg.AmountOfButtonsInRow, cfg.DelayUpdateQueue, cfg.TimeForExpiredEditSes)
 
-	b, err := bot.New(cfg.TelegramToken,  bot.WithInitialOffset(-1), bot.WithDefaultHandler(handlers.StateHandler))
+	b, err := bot.New(cfg.TelegramToken, bot.WithInitialOffset(-1), bot.WithDefaultHandler(handlers.StateHandler))
 
 	if err != nil {
 		log.Fatal("Ошибка при создании бота:", err)
 	}
-	
+
 	handlers.SetBot(b)
+
+	week1Date, err := time.Parse("02.01.2006", cfg.Week1Date)
+	if err != nil {
+		log.Fatal("Ошибка парсинга даты первой недели:", err)
+	}
+
+	sched := s.NewScheduler(database, b, handlers, int64(cfg.ChatId), week1Date, cfg.Week1Type, cfg.SchedulerTickInterval)
+
+	schedules, err := database.GetAllSchedulesWithNotifications(ctx)
+	if err != nil {
+		log.Fatal("Ошибка загрузки расписаний:", err)
+	}
+
+	handlers.SetScheduler(sched)
+
+	for _, schedule := range schedules {
+		sched.ScheduleNext(ctx, schedule)
+	}
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, handlers.StartHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/queue", bot.MatchTypeExact, handlers.SendQueueMessage)
@@ -54,7 +74,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveFromQueue", bot.MatchTypeExact, handlers.LeaveQueue)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SendQueueAgain", bot.MatchTypeExact, handlers.SendQueueAgain)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ActualQueue", bot.MatchTypeExact, handlers.ActualQueueInfo)
-	
+
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/edit_schedule", bot.MatchTypeExact, handlers.EditScheduleReplyText)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "AddNewSchedule", bot.MatchTypeExact, handlers.AddNewSchedule)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveEditSchedule", bot.MatchTypeExact, handlers.LeaveEditSchedule)
@@ -69,8 +89,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditThreadID:", bot.MatchTypePrefix, handlers.EditThreadID)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditDescription:", bot.MatchTypePrefix, handlers.EditDescription)
 
-	
 	log.Println("Бот запущен и готов к работе")
-	
+
 	b.Start(ctx)
 }

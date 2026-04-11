@@ -52,18 +52,20 @@ func (db *DBRepository) GetScheduleEntry(ctx context.Context, scheduleID int) (S
 	return schedule, nil
 }
 
-func (db *DBRepository) AddNewScheduleEntry(ctx context.Context, schedule Schedule) error {
-	_, err := db.pool.Exec(ctx, 
+func (db *DBRepository) AddNewScheduleEntry(ctx context.Context, schedule Schedule) (int, error) {
+	var id int
+	err := db.pool.QueryRow(ctx, 
 		`INSERT INTO schedules (day_of_week, week_type, start_time, end_time, thread_id, thread_description)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id`,
 		schedule.DayOfWeek, schedule.WeekType, schedule.StartTime, schedule.EndTime, schedule.ThreadID, schedule.ThreadDescription,
-	)
+	).Scan(&id)
 
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	return nil
+	return id, nil
 }
 
 func (db *DBRepository) DeleteScheduleEntry(ctx context.Context, scheduleID int) error {

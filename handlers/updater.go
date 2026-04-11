@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"log"
+	u "queuebot/utils"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -26,7 +27,7 @@ func (h *BotHandler) updateWorker(delay time.Duration, timeForExpiredEditSes tim
 			pending[task.scheduleID] = &task
 		case <-ticker.C:
 			for scheduleID, task := range pending {
-				ok, err := h.updateQueueMessage(task.ctx, task.b, task.chatID, scheduleID)
+				ok, err := h.updateQueueMessage(task.ctx, task.b, task.chatID, scheduleID, u.QueueOpen)
 				if err != nil {
 					log.Println("Ошибка обновления сообщения очереди:", err)
 				} else if !ok {

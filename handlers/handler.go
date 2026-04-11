@@ -28,6 +28,17 @@ type BotHandler struct {
 	amountOfSlotsInRow int
 
 	b *bot.Bot
+
+	scheduler SchedulerManager
+}
+
+type SchedulerManager interface {
+    ScheduleNext(ctx context.Context, schedule db.Schedule)
+    RemoveSchedule(scheduleID int)
+}
+
+func (h *BotHandler) SetScheduler(s SchedulerManager) {
+    h.scheduler = s
 }
 
 func (h *BotHandler) SetBot(b *bot.Bot) {

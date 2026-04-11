@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log"
 	"queuebot/db"
 	"strconv"
 	"strings"
@@ -64,4 +65,43 @@ func isQueueOpen(schedule db.Schedule) bool {
 		schedule.EndTime.Hour(), schedule.EndTime.Minute(), 0, 0, moscow)
 
 	return now.After(start) && now.Before(end)
+}
+
+func (h *BotHandler) reschedule(ctx context.Context, scheduleID int) error {
+	if h.scheduler == nil {
+		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
+    	return nil
+	}
+	
+    sch, err := h.db.GetScheduleEntry(ctx, scheduleID)
+    if err != nil {
+        return err
+    }
+	
+    err = h.db.ResetNotifications(ctx, scheduleID)
+	if err != nil {
+		return err
+	}
+
+    h.scheduler.RemoveSchedule(scheduleID)
+    h.scheduler.ScheduleNext(ctx, sch)
+
+    return nil
+}
+
+func (h *BotHandler) rescheduleWithSch(ctx context.Context, scheduleID int, sch db.Schedule) error {
+	if h.scheduler == nil {
+		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
+    	return nil
+	}
+
+    err := h.db.ResetNotifications(ctx, scheduleID)
+	if err != nil {
+		return err
+	}
+
+    h.scheduler.RemoveSchedule(scheduleID)
+    h.scheduler.ScheduleNext(ctx, sch)
+
+    return nil
 }

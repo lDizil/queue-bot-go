@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"maps"
 	"context"
 	"fmt"
 	"log"
@@ -113,9 +114,7 @@ func (h *BotHandler) ReturnToEditSchMenu(ctx context.Context, b *bot.Bot, schedu
 func (h *BotHandler) isExpiredUserEditSes(timeForExpiredEditSes time.Duration) {
 	h.stateMu.RLock()
     snapshot := make(map[int64]userState, len(h.userState))
-    for k, v := range h.userState {
-        snapshot[k] = v
-    }
+    maps.Copy(snapshot, h.userState)
     h.stateMu.RUnlock()
 	
 	for userID, s := range snapshot {

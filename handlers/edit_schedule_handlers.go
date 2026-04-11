@@ -314,13 +314,21 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 		ThreadDescription: description,
 	}
 
-	err := h.db.AddNewScheduleEntry(ctx, schedule)
+	id, err := h.db.AddNewScheduleEntry(ctx, schedule)
 
 	if err != nil {
 		log.Printf("Ошибка при добавлении записи в базу данных (пользователь %s). %v", username, err)
 		text := "Ошибка во время добавления записи в базу данных. Повторите попытку или обратитесь к модерации"
 		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnMainMenu)
 		return
+	}
+	
+	schedule.ID = id
+
+	if h.scheduler != nil {
+		h.scheduler.ScheduleNext(ctx, schedule)
+	} else {
+		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
 	}
 
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
@@ -393,6 +401,12 @@ func (h *BotHandler) DeleteScheduleEntry(ctx context.Context, b *bot.Bot, update
 		msg := fmt.Sprintf("Ошибка при удалении записи из расписания (пользователь %s).\n%v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return
+	}
+
+	if h.scheduler != nil {
+		h.scheduler.RemoveSchedule(scheduleID)
+	} else {
+		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
 	}
 
 	schedules, err := h.db.GetAllSchedules(ctx)
@@ -470,6 +484,14 @@ func (h *BotHandler) HandleNewTime(ctx context.Context, b *bot.Bot, update *mode
 	if err != nil {
 		log.Printf("Ошибка при получении обновлённой записи из базы данных (пользователь %s). %v", username, err)
 		text := "Ошибка при получении обновлённой записи из базы данных. Повторите попытку или обратитесь к модерации"
+		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditTime)
+		return
+	}
+
+	err = h.rescheduleWithSch(ctx, curState.scheduleID, sch) 
+	if err != nil {
+		log.Printf("Ошибка во время перепланирования записи (пользователь %s). %v", username, err)
+		text := "Ошибка при изменении времени в базе данных. Повторите попытку или обратитесь к модерации"
 		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditTime)
 		return
 	}
