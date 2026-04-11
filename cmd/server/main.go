@@ -37,8 +37,13 @@ func main() {
 		log.Fatal("Ошибка миграций:", err)
 	}
 
+	week1Date, err := time.Parse("2006-01-02", cfg.Week1Date)
+	if err != nil {
+		log.Fatal("Ошибка парсинга даты первой недели:", err)
+	}
+
 	database := db.NewDBRepo(pool)
-	handlers := h.NewBotHandler(database, cfg.TotalSlotsInQueue, cfg.AmountOfButtonsInRow, cfg.DelayUpdateQueue, cfg.TimeForExpiredEditSes)
+	handlers := h.NewBotHandler(database, cfg.TotalSlotsInQueue, cfg.AmountOfButtonsInRow, cfg.DelayUpdateQueue, cfg.TimeForExpiredEditSes, week1Date, cfg.Week1Type)
 
 	b, err := bot.New(cfg.TelegramToken, bot.WithInitialOffset(-1), bot.WithDefaultHandler(handlers.StateHandler))
 
@@ -48,10 +53,7 @@ func main() {
 
 	handlers.SetBot(b)
 
-	week1Date, err := time.Parse("02.01.2006", cfg.Week1Date)
-	if err != nil {
-		log.Fatal("Ошибка парсинга даты первой недели:", err)
-	}
+
 
 	sched := s.NewScheduler(database, b, handlers, int64(cfg.ChatId), week1Date, cfg.Week1Type, cfg.SchedulerTickInterval)
 
@@ -63,6 +65,9 @@ func main() {
 	handlers.SetScheduler(sched)
 
 	for _, schedule := range schedules {
+		if schedule.QueueMesID != nil {
+			handlers.SetQueueMessage(schedule.ID, *schedule.QueueMesID)
+		}
 		sched.ScheduleNext(ctx, schedule)
 	}
 
@@ -70,10 +75,11 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/queue", bot.MatchTypeExact, handlers.SendQueueMessage)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "Join:", bot.MatchTypePrefix, handlers.JoinToPosition)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinBusySlot:", bot.MatchTypePrefix, handlers.JoinBusySlot)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinFirstFreeslot", bot.MatchTypeExact, handlers.JoinClosestFreeSlot)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveFromQueue", bot.MatchTypeExact, handlers.LeaveQueue)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SendQueueAgain", bot.MatchTypeExact, handlers.SendQueueAgain)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinFirstFreeslot:", bot.MatchTypePrefix, handlers.JoinClosestFreeSlot)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveFromQueue:", bot.MatchTypePrefix, handlers.LeaveQueue)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SendQueueAgain:", bot.MatchTypePrefix, handlers.SendQueueAgain)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ActualQueue", bot.MatchTypeExact, handlers.ActualQueueInfo)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "CloseQueue", bot.MatchTypeExact, handlers.QueueClosed)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/edit_schedule", bot.MatchTypeExact, handlers.EditScheduleReplyText)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "AddNewSchedule", bot.MatchTypeExact, handlers.AddNewSchedule)

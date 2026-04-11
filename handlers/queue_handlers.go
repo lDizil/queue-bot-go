@@ -70,7 +70,7 @@ func (h *BotHandler) ActualQueueInfo(ctx context.Context, b *bot.Bot, update *mo
 	})
 }
 
-func (h *BotHandler) QueueClosedHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *BotHandler) QueueClosed(ctx context.Context, b *bot.Bot, update *models.Update) {
 	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		CallbackQueryID: update.CallbackQuery.ID,
 		Text:            "Очередь закрыта",
@@ -167,6 +167,15 @@ func (h *BotHandler) RenderQueueMessage(queue []db.QueueEntry, scheduleID int, s
 
 	if len(queue) == 0 {
 		builder.WriteString("Очередь пуста\n\n")
+		builder.WriteString("Свободные места: ")
+		
+		free := []string{}
+
+		for i := 1; i <= h.totalSlotsInQueue; i++ {
+			free = append(free, fmt.Sprintf("%d", i))
+		}
+
+		builder.WriteString(strings.Join(free, ", "))
 	} else {
 		builder.WriteString("Текущая очередь:\n\n")
 		for _, entry := range queue {

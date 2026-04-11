@@ -288,8 +288,25 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 		return
 	}
 
-	startTime, _ := time.Parse("15:04:05", newSchData[2])
-	endTime, _ := time.Parse("15:04:05", newSchData[3])
+	startTime, err := time.Parse("15:04:05", newSchData[2])
+	if err != nil {
+		startTime, err = time.Parse("15:04", newSchData[2])
+		if err != nil {
+			text := "Неверно задано время начала, повторите ввод.\n\nОжидается: <день недели>,<тип недели>,<время начала>,<время окончания>,<ID темы вашего чата>,<Описание (необязательно)>."
+			h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnMainMenu)
+			return
+		}
+	}
+
+	endTime, err := time.Parse("15:04:05", newSchData[3])
+	if err != nil {
+		endTime, err = time.Parse("15:04", newSchData[3])
+		if err != nil {
+			text := "Неверно задано время конца, повторите ввод.\n\nОжидается: <день недели>,<тип недели>,<время начала>,<время окончания>,<ID темы вашего чата>,<Описание (необязательно)>."
+			h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnMainMenu)
+			return
+		}
+	}
 	ThreadID, _ := strconv.Atoi(newSchData[4])
 
 	var description *string

@@ -172,7 +172,7 @@ func (h *BotHandler) EditTime(ctx context.Context, b *bot.Bot, update *models.Up
 
 	h.stateMu.Lock()
 	session := h.userState[userID]
-	session.state = curState
+	session.state = curUserState
 	session.scheduleID = scheduleID
 	h.userState[userID] = session
 	h.stateMu.Unlock()

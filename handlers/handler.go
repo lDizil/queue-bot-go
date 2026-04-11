@@ -30,6 +30,9 @@ type BotHandler struct {
 	b *bot.Bot
 
 	scheduler SchedulerManager
+
+    week1Date time.Time
+    week1Type string
 }
 
 type SchedulerManager interface {
@@ -52,7 +55,7 @@ type userState struct {
 	chatID     int64
 }
 
-func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay time.Duration, timeForExpiredEditSes time.Duration) *BotHandler {
+func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay time.Duration, timeForExpiredEditSes time.Duration, week1Date time.Time, week1Type string) *BotHandler {
 	h := &BotHandler{
 		db:                 db,
 		queueMessages:      make(map[int]int),
@@ -61,6 +64,8 @@ func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay ti
 		updateQueue:        make(chan updateTask, 100),
 		totalSlotsInQueue:  totalSlots,
 		amountOfSlotsInRow: slotsInRow,
+		week1Date: week1Date,
+		week1Type: week1Type,
 	}
 
 	go h.updateWorker(delay, timeForExpiredEditSes)
@@ -121,4 +126,10 @@ func (h *BotHandler) getAllReplyInfo(update *models.Update) (*models.CallbackQue
 	replyEditMesID := query.Message.Message.ID
 
 	return query, data, chatID, userID, username, replyEditMesID
+}
+
+func (h *BotHandler) SetQueueMessage(scheduleID, messageID int) {
+	h.queueMu.Lock()
+	h.queueMessages[scheduleID] = messageID
+	h.queueMu.Unlock()
 }

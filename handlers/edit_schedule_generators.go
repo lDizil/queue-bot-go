@@ -4,16 +4,20 @@ import (
 	"context"
 	"fmt"
 	"queuebot/db"
+	u "queuebot/utils"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
 
 func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *models.InlineKeyboardMarkup) {
-	text := "Вы вошли в режим редактирования.\nМожете изменить существующие записи или добавить новые.\n"
+	text := "Вы вошли в режим редактирования.\nМожете изменить существующие записи или добавить новые.\n\n"
 
+	curWeekType := u.WeekTypeForDate(time.Now(), h.week1Date, h.week1Type)
+	text += fmt.Sprintf("Текущий тип недели по мнению бота: %s", weekTypeEnToRu[curWeekType])
 	var builder strings.Builder
 
 	builder.Grow(120 + len(schedules)*30)
@@ -101,11 +105,10 @@ func (h *BotHandler) GenerateEditScheduleMenu(sch db.Schedule) (string, *models.
 		CallbackData: fmt.Sprintf("EditThreadID:%d", sch.ID),
 	}
 	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-	
+
 	btn = models.InlineKeyboardButton{
 		Text:         "Изменить описание",
 		CallbackData: fmt.Sprintf("EditDescription:%d", sch.ID),
-	
 	}
 	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
 	btn = models.InlineKeyboardButton{

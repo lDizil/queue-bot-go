@@ -68,12 +68,18 @@ func (h *BotHandler) isValidData(data []string) bool {
 
 	_, err := time.Parse("15:04:05", data[2])
 	if err != nil {
-		return false
+		_, err = time.Parse("15:04", data[2])
+		if err != nil {
+			return false
+		}
 	}
 
 	_, err = time.Parse("15:04:05", data[3])
 	if err != nil {
-		return false
+		_, err = time.Parse("15:04", data[3])
+		if err != nil {
+			return false
+		}
 	}
 
 	_, err = strconv.Atoi(data[4])
