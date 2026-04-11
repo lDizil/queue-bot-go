@@ -14,7 +14,7 @@ import (
 )
 
 func (h *BotHandler) Back(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 
 	schedules, err := h.db.GetAllSchedules(ctx)
 	if err != nil {
@@ -69,14 +69,8 @@ func (h *BotHandler) Back(ctx context.Context, b *bot.Bot, update *models.Update
 	}
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
 
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:      chatID,
@@ -143,7 +137,7 @@ func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, upda
 
 
 func (h *BotHandler) EditScheduleEntry(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 
 	scheduleID, err := strconv.Atoi(strings.Split(data, ":")[1])
 
@@ -154,14 +148,8 @@ func (h *BotHandler) EditScheduleEntry(ctx context.Context, b *bot.Bot, update *
 	}
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
 
 	schedule, err := h.db.GetScheduleEntry(ctx, scheduleID)
 
@@ -188,17 +176,11 @@ func (h *BotHandler) EditScheduleEntry(ctx context.Context, b *bot.Bot, update *
 }
 
 func (h *BotHandler) LeaveEditSchedule(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, _, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, _, chatID, userID, username := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
 
 	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
@@ -222,17 +204,11 @@ func (h *BotHandler) LeaveEditSchedule(ctx context.Context, b *bot.Bot, update *
 }
 
 func (h *BotHandler) AddNewSchedule(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, _, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, _, chatID, userID, username := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
 	
 	h.stateMu.Lock()
 	session := h.userState[userID]
@@ -392,17 +368,11 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 }
 
 func (h *BotHandler) DeleteScheduleEntry(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
 
 	scheduleID, err := strconv.Atoi(strings.Split(data, ":")[1])
 

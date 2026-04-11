@@ -123,7 +123,7 @@ func (h *BotHandler) SendQueueAgain(ctx context.Context, b *bot.Bot, update *mod
 		return
 	}
 
-	isOpen := isQueueOpen(schedule)
+	isOpen := h.isQueueOpen(schedule)
 
 	var status u.QueueStatus
 	if isOpen {

@@ -115,7 +115,7 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 	}
 }
 
-func (h *BotHandler) getAllReplyInfo(update *models.Update) (*models.CallbackQuery, string, int64, int64, string, int) {
+func (h *BotHandler) getAllReplyInfo(update *models.Update) (*models.CallbackQuery, string, int64, int64, string) {
 	query := update.CallbackQuery
 	data := query.Data
 
@@ -123,9 +123,7 @@ func (h *BotHandler) getAllReplyInfo(update *models.Update) (*models.CallbackQue
 	username := query.From.Username
 	userID := query.From.ID
 
-	replyEditMesID := query.Message.Message.ID
-
-	return query, data, chatID, userID, username, replyEditMesID
+	return query, data, chatID, userID, username
 }
 
 func (h *BotHandler) SetQueueMessage(scheduleID, messageID int) {

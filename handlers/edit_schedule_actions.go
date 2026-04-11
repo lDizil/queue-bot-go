@@ -12,18 +12,12 @@ import (
 )
 
 func (h *BotHandler) ChangeWeekType(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
-
+	
 	dataSl := strings.Split(data, ":")
 
 	scheduleID, err := strconv.Atoi(dataSl[1])
@@ -56,17 +50,11 @@ func (h *BotHandler) ChangeWeekType(ctx context.Context, b *bot.Bot, update *mod
 }
 
 func (h *BotHandler) ChangeWeekDay(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
 
 	params := strings.Split(data, ":")
 
@@ -100,18 +88,12 @@ func (h *BotHandler) ChangeWeekDay(ctx context.Context, b *bot.Bot, update *mode
 }
 
 func (h *BotHandler) EditTimeMenu(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
-
+	
 	dataSl := strings.Split(data, ":")
 
 	scheduleID, err := strconv.Atoi(dataSl[1])
@@ -140,17 +122,11 @@ func (h *BotHandler) EditTimeMenu(ctx context.Context, b *bot.Bot, update *model
 }
 
 func (h *BotHandler) EditTime(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
 
 	dataSl := strings.Split(data, ":")
 
@@ -207,17 +183,11 @@ func (h *BotHandler) EditTime(ctx context.Context, b *bot.Bot, update *models.Up
 }
 
 func (h *BotHandler) EditThreadID(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
 
 	dataSl := strings.Split(data, ":")
 
@@ -262,17 +232,11 @@ func (h *BotHandler) EditThreadID(ctx context.Context, b *bot.Bot, update *model
 }
 
 func (h *BotHandler) EditDescription(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
 
 	dataSl := strings.Split(data, ":")
 

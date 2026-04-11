@@ -12,28 +12,11 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
-
-
-func (h *BotHandler) validateEditSession(ctx context.Context, b *bot.Bot, editMesID int, replyEditMesID int, query *models.CallbackQuery, exists bool) bool {
-	if !exists {
-		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			Text:            "Вы не находитесь в режиме редактирования",
-			CallbackQueryID: query.ID,
-		})
-
-		return false
-	}
-
-	if editMesID != replyEditMesID {
-		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			Text:            "Это сообщение редактирования очереди для другого пользователя. Если хотите также изменить расписание, вызовите /edit_schedule",
-			CallbackQueryID: query.ID,
-		})
-
-		return false
-	}
-
-	return true
+func (h *BotHandler) GetEditMessage(userID int64) (int, bool) {
+    h.editMu.RLock()
+    defer h.editMu.RUnlock()
+    id, ok := h.editMessages[userID]
+    return id, ok
 }
 
 func (h *BotHandler) EditMesWithError(ctx context.Context, b *bot.Bot, chatID int64, editMesID int, text string, backBtn models.InlineKeyboardButton) {

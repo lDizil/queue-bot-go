@@ -55,7 +55,7 @@ func (h *BotHandler) checkIsUserInQueue(ctx context.Context, b *bot.Bot, userID 
 	return false, nil
 }
 
-func isQueueOpen(schedule db.Schedule) bool {
+func (h *BotHandler) isQueueOpen(schedule db.Schedule) bool {
 	moscow, _ := time.LoadLocation("Europe/Moscow")
 	now := time.Now().In(moscow)
 
@@ -65,6 +65,14 @@ func isQueueOpen(schedule db.Schedule) bool {
 		schedule.EndTime.Hour(), schedule.EndTime.Minute(), 0, 0, moscow)
 
 	return now.After(start) && now.Before(end)
+}
+
+func (h *BotHandler) IsQueueOpen(scheduleID int) bool {
+    schedule, err := h.db.GetScheduleEntry(context.Background(), scheduleID)
+    if err != nil {
+        return false
+    }
+    return h.isQueueOpen(schedule)
 }
 
 func (h *BotHandler) reschedule(ctx context.Context, scheduleID int) error {

@@ -122,17 +122,11 @@ func (h *BotHandler) GenerateEditScheduleMenu(sch db.Schedule) (string, *models.
 }
 
 func (h *BotHandler) GenerateChangeWeekDayMenu(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, data, chatID, userID, username, replyEditMesID := h.getAllReplyInfo(update)
+	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 
 	h.editMu.RLock()
-	editMesID, exists := h.editMessages[userID]
+	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-
-	isUserCanChange := h.validateEditSession(ctx, b, editMesID, replyEditMesID, query, exists)
-
-	if !isUserCanChange {
-		return
-	}
 
 	dataSl := strings.Split(data, ":")
 
