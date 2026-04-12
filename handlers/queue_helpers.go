@@ -64,52 +64,57 @@ func (h *BotHandler) isQueueOpen(schedule db.Schedule) bool {
 	end := time.Date(now.Year(), now.Month(), now.Day(),
 		schedule.EndTime.Hour(), schedule.EndTime.Minute(), 0, 0, moscow)
 
+	// если конец раньше начала — очередь переходит через полночь
+	if end.Before(start) {
+		end = end.AddDate(0, 0, 1)
+	}
+
 	return now.After(start) && now.Before(end)
 }
 
 func (h *BotHandler) IsQueueOpen(scheduleID int) bool {
-    schedule, err := h.db.GetScheduleEntry(context.Background(), scheduleID)
-    if err != nil {
-        return false
-    }
-    return h.isQueueOpen(schedule)
+	schedule, err := h.db.GetScheduleEntry(context.Background(), scheduleID)
+	if err != nil {
+		return false
+	}
+	return h.isQueueOpen(schedule)
 }
 
 func (h *BotHandler) reschedule(ctx context.Context, scheduleID int) error {
 	if h.scheduler == nil {
 		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
-    	return nil
+		return nil
 	}
-	
-    sch, err := h.db.GetScheduleEntry(ctx, scheduleID)
-    if err != nil {
-        return err
-    }
-	
-    err = h.db.ResetNotifications(ctx, scheduleID)
+
+	sch, err := h.db.GetScheduleEntry(ctx, scheduleID)
 	if err != nil {
 		return err
 	}
 
-    h.scheduler.RemoveSchedule(scheduleID)
-    h.scheduler.ScheduleNext(ctx, sch)
+	err = h.db.ResetNotifications(ctx, scheduleID)
+	if err != nil {
+		return err
+	}
 
-    return nil
+	h.scheduler.RemoveSchedule(scheduleID)
+	h.scheduler.ScheduleNext(ctx, sch)
+
+	return nil
 }
 
 func (h *BotHandler) rescheduleWithSch(ctx context.Context, scheduleID int, sch db.Schedule) error {
 	if h.scheduler == nil {
 		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
-    	return nil
+		return nil
 	}
 
-    err := h.db.ResetNotifications(ctx, scheduleID)
+	err := h.db.ResetNotifications(ctx, scheduleID)
 	if err != nil {
 		return err
 	}
 
-    h.scheduler.RemoveSchedule(scheduleID)
-    h.scheduler.ScheduleNext(ctx, sch)
+	h.scheduler.RemoveSchedule(scheduleID)
+	h.scheduler.ScheduleNext(ctx, sch)
 
-    return nil
+	return nil
 }

@@ -283,10 +283,16 @@ func (s *Scheduler) RunInstant(ctx context.Context, threadID int) {
 	moscow, _ := time.LoadLocation("Europe/Moscow")
 	now := time.Now().In(moscow)
 
+	startMsk := now.Add(6 * time.Minute)
+	endMsk := now.Add(6*time.Minute + 90*time.Minute)
+
+	startTimeOnly := time.Date(0, 1, 1, startMsk.Hour(), startMsk.Minute(), 0, 0, time.UTC)
+	endTimeOnly := time.Date(0, 1, 1, endMsk.Hour(), endMsk.Minute(), 0, 0, time.UTC)
+
 	schedule := db.Schedule{
 		ThreadID:    threadID,
-		StartTime:   now.Add(6 * time.Minute),
-		EndTime:     now.Add(6*time.Minute + 90*time.Minute),
+		StartTime:   startTimeOnly,
+		EndTime:     endTimeOnly,
 		IsTemporary: true,
 	}
 
