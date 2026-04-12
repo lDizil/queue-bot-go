@@ -32,12 +32,12 @@ func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *mode
 			var btn models.InlineKeyboardButton
 			if sch.ThreadDescription == nil {
 				btn = models.InlineKeyboardButton{
-					Text:         fmt.Sprintf("%s | %s | %s - %s | %d", dayEnToRuShort[strings.ToLower(sch.DayOfWeek)], weekTypeEnToRuShort[strings.ToLower(sch.WeekType)], sch.StartTime.Format("15:04:05"), sch.EndTime.Format("15:04"), sch.ThreadID),
+					Text:         fmt.Sprintf("%s | %s | %s - %s | %d", dayEnToRuShort[strings.ToLower(sch.DayOfWeek)], weekTypeEnToRuShort[strings.ToLower(sch.WeekType)], sch.StartTime.Format("15:04"), sch.EndTime.Format("15:04"), sch.ThreadID),
 					CallbackData: fmt.Sprintf("EditSchedule:%d", sch.ID),
 				}
 			} else {
 				btn = models.InlineKeyboardButton{
-					Text:         fmt.Sprintf("%s | %s | %s - %s | %d | %s", dayEnToRuShort[strings.ToLower(sch.DayOfWeek)], weekTypeEnToRuShort[strings.ToLower(sch.WeekType)], sch.StartTime.Format("15:04:05"), sch.EndTime.Format("15:04"), sch.ThreadID, *sch.ThreadDescription),
+					Text:         fmt.Sprintf("%s | %s | %s - %s | %d | %s", dayEnToRuShort[strings.ToLower(sch.DayOfWeek)], weekTypeEnToRuShort[strings.ToLower(sch.WeekType)], sch.StartTime.Format("15:04"), sch.EndTime.Format("15:04"), sch.ThreadID, *sch.ThreadDescription),
 					CallbackData: fmt.Sprintf("EditSchedule:%d", sch.ID),
 				}
 			}
