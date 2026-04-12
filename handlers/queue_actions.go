@@ -37,6 +37,21 @@ func (h *BotHandler) JoinToPosition(ctx context.Context, b *bot.Bot, update *mod
 		return
 	}
 
+	taken, err := h.db.IsPositionTaken(ctx, slot, scheduleID)
+	if err != nil {
+		msg := fmt.Sprintf("Ошибка проверки занята ли позиция (пользователь %s). %v", username, err)
+		h.handleError(ctx, b, query.ID, msg)
+		return
+	}
+
+	if taken {
+		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			Text:            "Место уже занято, выберите другое",
+			CallbackQueryID: query.ID,
+		})
+		return
+	}
+
 	entry := db.QueueEntry{
 		UserID:     userID,
 		Username:   username,
@@ -82,24 +97,22 @@ func (h *BotHandler) JoinClosestFreeSlot(ctx context.Context, b *bot.Bot, update
 		return
 	}
 
-	isInQueue, err := h.checkIsUserInQueue(ctx, b, userID, scheduleID, query, username)
-
-	if err != nil {
-		return
-	}
-
-	if isInQueue {
-		return
-	}
-
 	slot, err := h.db.JoinFirstFreeSlot(ctx, userID, username, scheduleID, h.totalSlotsInQueue)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-				Text:            "Все места в очереди заняты",
-				CallbackQueryID: query.ID,
-			})
-
+			// либо все места заняты, либо пользователь уже в очереди
+			isInQueue, checkErr := h.db.IsUserInQueue(ctx, userID, scheduleID)
+			if checkErr == nil && isInQueue {
+				b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					Text:            "Вы уже заняли место в очереди",
+					CallbackQueryID: query.ID,
+				})
+			} else {
+				b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					Text:            "Все места в очереди заняты",
+					CallbackQueryID: query.ID,
+				})
+			}
 			return
 		} else {
 			msg := fmt.Sprintf("Ошибка при попытке занять ближайшее место в очереди (пользователь %s). %v", username, err)

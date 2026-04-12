@@ -31,26 +31,26 @@ type BotHandler struct {
 
 	scheduler SchedulerManager
 
-    week1Date time.Time
-    week1Type string
+	week1Date time.Time
+	week1Type string
 }
 
 type SchedulerManager interface {
-    ScheduleNext(ctx context.Context, schedule db.Schedule)
-    RemoveSchedule(scheduleID int)
+	ScheduleNext(ctx context.Context, schedule db.Schedule)
+	RemoveSchedule(scheduleID int)
 	RunInstant(ctx context.Context, threadID int)
 }
 
 func (h *BotHandler) SetScheduler(s SchedulerManager) {
-    h.scheduler = s
+	h.scheduler = s
 }
 
 func (h *BotHandler) SetBot(b *bot.Bot) {
-    h.b = b
+	h.b = b
 }
 
 type userState struct {
-	state string
+	state      string
 	scheduleID int
 	enteredAt  time.Time
 	chatID     int64
@@ -65,8 +65,21 @@ func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay ti
 		updateQueue:        make(chan updateTask, 100),
 		totalSlotsInQueue:  totalSlots,
 		amountOfSlotsInRow: slotsInRow,
-		week1Date: week1Date,
-		week1Type: week1Type,
+		week1Date:          week1Date,
+		week1Type:          week1Type,
+	}
+
+	// восстановить queue_message_id из БД после перезапуска
+	ctx := context.Background()
+	schedules, err := db.GetAllSchedules(ctx)
+	if err != nil {
+		log.Println("Предупреждение: не удалось загрузить queue_message_id из БД:", err)
+	} else {
+		for _, s := range schedules {
+			if s.QueueMesID != nil {
+				h.queueMessages[s.ID] = *s.QueueMesID
+			}
+		}
 	}
 
 	go h.updateWorker(delay, timeForExpiredEditSes)
@@ -89,7 +102,7 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 	}
 
 	if update.Message == nil {
-    	return
+		return
 	}
 
 	userID := update.Message.From.ID
@@ -97,7 +110,7 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 	h.stateMu.RLock()
 	curState := h.userState[userID]
 	h.stateMu.RUnlock()
-	
+
 	switch curState.state {
 	case "awaiting_schedule":
 		h.HandleScheduleInput(ctx, b, update)
@@ -107,7 +120,7 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 
 	case "edit_end_time":
 		h.HandleNewTime(ctx, b, update)
-		
+
 	case "edit_thread_id":
 		h.HandleNewThreadID(ctx, b, update)
 

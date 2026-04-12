@@ -4,7 +4,6 @@ import (
 	"context"
 )
 
-
 func (db *DBRepository) GetQueue(ctx context.Context, scheduleID int) ([]QueueEntry, error) {
 	rows, err := db.pool.Query(ctx, "SELECT id, user_id, username, schedule_id, position FROM queue_entries WHERE schedule_id=$1 ORDER BY position", scheduleID)
 
@@ -18,7 +17,7 @@ func (db *DBRepository) GetQueue(ctx context.Context, scheduleID int) ([]QueueEn
 
 	for rows.Next() {
 		var entry QueueEntry
-		
+
 		err := rows.Scan(&entry.ID, &entry.UserID, &entry.Username, &entry.ScheduleID, &entry.Position)
 		if err != nil {
 			return nil, err
@@ -68,6 +67,9 @@ func (db *DBRepository) JoinFirstFreeSlot(ctx context.Context, userID int64, use
 		FROM generate_series(1, $4) AS free(pos)
 		WHERE free.pos NOT IN (
 			SELECT position FROM queue_entries WHERE schedule_id=$3
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM queue_entries WHERE user_id=$1 AND schedule_id=$3
 		)
 		RETURNING position`,
 		userID, username, scheduleID, totalSlots,
