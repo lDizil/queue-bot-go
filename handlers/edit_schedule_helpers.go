@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"maps"
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"strconv"
 	"time"
 
@@ -13,10 +13,10 @@ import (
 )
 
 func (h *BotHandler) GetEditMessage(userID int64) (int, bool) {
-    h.editMu.RLock()
-    defer h.editMu.RUnlock()
-    id, ok := h.editMessages[userID]
-    return id, ok
+	h.editMu.RLock()
+	defer h.editMu.RUnlock()
+	id, ok := h.editMessages[userID]
+	return id, ok
 }
 
 func (h *BotHandler) EditMesWithError(ctx context.Context, b *bot.Bot, chatID int64, editMesID int, text string, backBtn models.InlineKeyboardButton) {
@@ -102,10 +102,10 @@ func (h *BotHandler) ReturnToEditSchMenu(ctx context.Context, b *bot.Bot, schedu
 
 func (h *BotHandler) isExpiredUserEditSes(timeForExpiredEditSes time.Duration) {
 	h.stateMu.RLock()
-    snapshot := make(map[int64]userState, len(h.userState))
-    maps.Copy(snapshot, h.userState)
-    h.stateMu.RUnlock()
-	
+	snapshot := make(map[int64]userState, len(h.userState))
+	maps.Copy(snapshot, h.userState)
+	h.stateMu.RUnlock()
+
 	for userID, s := range snapshot {
 		if time.Since(s.enteredAt) > timeForExpiredEditSes {
 			h.editMu.RLock()
@@ -126,6 +126,7 @@ func (h *BotHandler) isExpiredUserEditSes(timeForExpiredEditSes time.Duration) {
 
 			h.editMu.Lock()
 			delete(h.editMessages, userID)
+			delete(h.editMessageChats, userID)
 			h.editMu.Unlock()
 
 			h.stateMu.Lock()

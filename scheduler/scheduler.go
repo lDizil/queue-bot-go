@@ -17,7 +17,7 @@ import (
 type QueueSender interface {
 	SendNotification5min(ctx context.Context, b *bot.Bot, chatID int64, threadID int, scheduleID int) error
 	SendNotification1min(ctx context.Context, b *bot.Bot, chatID int64, threadID int, scheduleID int) error
-	SendScheduledQueue(ctx context.Context, b *bot.Bot, chatID int64,  scheduleID int, threadID int, statusQueue u.QueueStatus) (int, error)
+	SendScheduledQueue(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int, threadID int, statusQueue u.QueueStatus) (int, error)
 	EditScheduledQueue(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int, statusQueue u.QueueStatus) error
 	ClearScheduledQueue(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int, statusQueue u.QueueStatus) error
 }
@@ -172,12 +172,14 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 	tOpen := start
 	tClose := end
 
+	now := time.Now().In(moscow)
+
 	fired := map[string]bool{
-		"5min":       schedule.Notified5min,
-		"1min_notif": schedule.Notified1min,
-		"1min":       schedule.Notified1min,
-		"open":       schedule.NotifiedOpen,
-		"close":      false,
+		"5min":       schedule.Notified5min || now.After(t5min),
+		"1min_notif": schedule.Notified1min || now.After(t1min),
+		"1min":       schedule.Notified1min || now.After(t1min),
+		"open":       schedule.NotifiedOpen || now.After(tOpen),
+		"close":      now.After(tClose),
 	}
 
 	ticker := time.NewTicker(s.tickInterval)
@@ -278,32 +280,32 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 }
 
 func (s *Scheduler) RunInstant(ctx context.Context, threadID int) {
-    moscow, _ := time.LoadLocation("Europe/Moscow")
-    now := time.Now().In(moscow)
+	moscow, _ := time.LoadLocation("Europe/Moscow")
+	now := time.Now().In(moscow)
 
-    schedule := db.Schedule{
-        ThreadID:    threadID,
-        StartTime:   now.Add(6 * time.Minute),
-        EndTime:     now.Add(6*time.Minute + 90*time.Second),
-        IsTemporary: true,
-    }
+	schedule := db.Schedule{
+		ThreadID:    threadID,
+		StartTime:   now.Add(6 * time.Minute),
+		EndTime:     now.Add(6*time.Minute + 90*time.Second),
+		IsTemporary: true,
+	}
 
-    id, err := s.db.AddTemporarySchedule(ctx, schedule)
-    if err != nil {
-        log.Printf("RunInstant: ошибка создания временной записи: %v", err)
-        return
-    }
+	id, err := s.db.AddTemporarySchedule(ctx, schedule)
+	if err != nil {
+		log.Printf("RunInstant: ошибка создания временной записи: %v", err)
+		return
+	}
 
-    schedule.ID = id
+	schedule.ID = id
 
-    workerCtx, cancel := context.WithCancel(ctx)
+	workerCtx, cancel := context.WithCancel(ctx)
 
-    s.mu.Lock()
-    s.timers[id] = &scheduleTimer{
-        timer:  time.AfterFunc(0, func() {}),
-        cancel: cancel,
-    }
-    s.mu.Unlock()
+	s.mu.Lock()
+	s.timers[id] = &scheduleTimer{
+		timer:  time.AfterFunc(0, func() {}),
+		cancel: cancel,
+	}
+	s.mu.Unlock()
 
-    go s.runDayWorker(workerCtx, schedule, now)
+	go s.runDayWorker(workerCtx, schedule, now)
 }

@@ -14,9 +14,10 @@ import (
 type BotHandler struct {
 	db *db.DBRepository
 
-	queueMessages map[int]int
-	userState     map[int64]userState
-	editMessages  map[int64]int
+	queueMessages    map[int]int
+	userState        map[int64]userState
+	editMessages     map[int64]int
+	editMessageChats map[int64]int64
 
 	queueMu sync.RWMutex
 	stateMu sync.RWMutex
@@ -62,6 +63,7 @@ func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay ti
 		queueMessages:      make(map[int]int),
 		userState:          make(map[int64]userState),
 		editMessages:       make(map[int64]int),
+		editMessageChats:   make(map[int64]int64),
 		updateQueue:        make(chan updateTask, 100),
 		totalSlotsInQueue:  totalSlots,
 		amountOfSlotsInRow: slotsInRow,

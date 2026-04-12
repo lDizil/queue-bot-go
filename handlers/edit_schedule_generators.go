@@ -17,7 +17,7 @@ func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *mode
 	text := "Вы вошли в режим редактирования.\nМожете изменить существующие записи или добавить новые.\n\n"
 
 	curWeekType := u.WeekTypeForDate(time.Now(), h.week1Date, h.week1Type)
-	text += fmt.Sprintf("Текущий тип недели по мнению бота: %s", weekTypeEnToRu[curWeekType])
+	text += fmt.Sprintf("Текущий тип недели по мнению бота: %s\n", weekTypeEnToRu[curWeekType])
 	var builder strings.Builder
 
 	builder.Grow(120 + len(schedules)*30)
