@@ -63,7 +63,7 @@ func (db *DBRepository) JoinFirstFreeSlot(ctx context.Context, userID int64, use
 
 	err := db.pool.QueryRow(ctx,
 		`INSERT INTO queue_entries (user_id, username, schedule_id, position)
-		SELECT $1, $2, $3, MIN(free.pos)
+		SELECT $1, $2, $3, free.pos
 		FROM generate_series(1, $4) AS free(pos)
 		WHERE free.pos NOT IN (
 			SELECT position FROM queue_entries WHERE schedule_id=$3
@@ -71,6 +71,8 @@ func (db *DBRepository) JoinFirstFreeSlot(ctx context.Context, userID int64, use
 		AND NOT EXISTS (
 			SELECT 1 FROM queue_entries WHERE user_id=$1 AND schedule_id=$3
 		)
+		ORDER BY free.pos
+		LIMIT 1
 		RETURNING position`,
 		userID, username, scheduleID, totalSlots,
 	).Scan(&position)
