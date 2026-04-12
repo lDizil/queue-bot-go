@@ -4,24 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
-	"queuebot/db"
-	"strings"
-	u "queuebot/utils"
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"log"
+	"queuebot/db"
+	u "queuebot/utils"
+	"strings"
 )
 
 func (h *BotHandler) RunOneShotQueue(ctx context.Context, b *bot.Bot, update *models.Update) {
-    threadID := update.Message.MessageThreadID
+	threadID := update.Message.MessageThreadID
 
-    b.SendMessage(ctx, &bot.SendMessageParams{
-        ChatID:          update.Message.Chat.ID,
-        MessageThreadID: threadID,
-        Text:            "Одноразовая очередь будет запущена через 6 минут.",
-    })
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:          update.Message.Chat.ID,
+		MessageThreadID: threadID,
+		Text:            "Одноразовая очередь будет запущена через 6 минут.",
+	})
 
-    h.scheduler.RunInstant(ctx, threadID)
+	h.scheduler.RunInstant(ctx, threadID)
 }
 
 func (h *BotHandler) sendQueueMessage(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int, threadID int, statusQueue u.QueueStatus) (int, error) {
@@ -124,7 +124,7 @@ func (h *BotHandler) SendQueueAgain(ctx context.Context, b *bot.Bot, update *mod
 
 	var status u.QueueStatus
 	if isOpen {
-		status = u.QueueOpen 
+		status = u.QueueOpen
 	} else {
 		status = u.QueueClosed
 	}
@@ -165,7 +165,7 @@ func (h *BotHandler) RenderQueueMessage(queue []db.QueueEntry, scheduleID int, s
 	if len(queue) == 0 {
 		builder.WriteString("Очередь пуста\n\n")
 		builder.WriteString("Свободные места: ")
-		
+
 		free := []string{}
 
 		for i := 1; i <= h.totalSlotsInQueue; i++ {
@@ -256,8 +256,7 @@ func (h *BotHandler) RenderQueueMessage(queue []db.QueueEntry, scheduleID int, s
 	}
 
 	builder.WriteString(status)
-	
-	
+
 	return builder.String(), &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
 }
 
@@ -303,15 +302,17 @@ func (h *BotHandler) SendScheduledQueue(ctx context.Context, b *bot.Bot, chatID 
 		return 0, err
 	}
 
+	h.SetQueueMessage(scheduleID, msgID)
+
 	return msgID, nil
 }
 
 func (h *BotHandler) EditScheduledQueue(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int, statusQueue u.QueueStatus) error {
 	isUpdated, err := h.updateQueueMessage(ctx, b, chatID, scheduleID, statusQueue)
 	if !isUpdated {
-        log.Printf("Ошибка обновления сообщения с очередью %v", err)
-    }
-    return err
+		log.Printf("Ошибка обновления сообщения с очередью %v", err)
+	}
+	return err
 }
 
 func (h *BotHandler) SendNotification5min(ctx context.Context, b *bot.Bot, chatID int64, threadID int, scheduleID int) error {
@@ -350,13 +351,13 @@ func (h *BotHandler) ClearScheduledQueue(ctx context.Context, b *bot.Bot, chatID
 		log.Printf("Ошибка обновления сообщения с очередью: %v", err)
 		return err
 	}
-	
+
 	err = h.db.ClearQueue(ctx, scheduleID)
 	if err != nil {
 		log.Printf("Ошибка очистки очереди в базе данных: %v", err)
 		return err
 	}
-	
+
 	err = h.db.ClearQueueMessageID(ctx, scheduleID)
 	if err != nil {
 		log.Printf("Ошибка удаления айди сообщения с очередью из базы данных: %v", err)

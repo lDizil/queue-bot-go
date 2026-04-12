@@ -286,7 +286,7 @@ func (s *Scheduler) RunInstant(ctx context.Context, threadID int) {
 	schedule := db.Schedule{
 		ThreadID:    threadID,
 		StartTime:   now.Add(6 * time.Minute),
-		EndTime:     now.Add(6*time.Minute + 90*time.Second),
+		EndTime:     now.Add(6*time.Minute + 90*time.Minute),
 		IsTemporary: true,
 	}
 
