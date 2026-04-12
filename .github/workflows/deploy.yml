@@ -1,0 +1,43 @@
+name: QueueBot Go — Auto Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.GO_BOT_SERVER_HOST }}
+          username: ${{ secrets.GO_BOT_SERVER_USER }}
+          key: ${{ secrets.GO_BOT_SSH_PRIVATE_KEY }}
+          script: |
+            cd ~/queue-bot-go
+            git fetch origin main
+            git reset --hard origin/main
+            git clean -fd
+            docker compose down
+            docker compose build
+            docker compose up -d
+            echo '--- Deployment complete. Container logs: ---'
+            sleep 3
+            docker logs queuebot --tail 20
+
+      - name: Verify Deployment
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.GO_BOT_SERVER_HOST }}
+          username: ${{ secrets.GO_BOT_SERVER_USER }}
+          key: ${{ secrets.GO_BOT_SSH_PRIVATE_KEY }}
+          script: |
+            cd ~/queue-bot-go
+            git log --oneline -3
+            docker ps
