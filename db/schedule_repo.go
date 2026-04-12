@@ -10,7 +10,8 @@ func (db *DBRepository) GetAllSchedules(ctx context.Context) ([]Schedule, error)
 
 	rows, err := db.pool.Query(ctx, 
 		`SELECT id, day_of_week, week_type, start_time, end_time, thread_id, thread_description, queue_message_id
-		FROM schedules`,
+		FROM schedules
+		WHERE is_temporary = false`,
 	)
 
 	if err != nil {
@@ -267,7 +268,8 @@ func (db *DBRepository) GetAllSchedulesWithNotifications(ctx context.Context) ([
 
 	rows, err := db.pool.Query(ctx, 
 		`SELECT id, day_of_week, week_type, start_time, end_time, thread_id, thread_description, queue_message_id, notified_5min, notified_1min, notified_open
-		FROM schedules`,
+		FROM schedules
+		WHERE is_temporary = false`,
 	)
 
 	if err != nil {
@@ -288,4 +290,21 @@ func (db *DBRepository) GetAllSchedulesWithNotifications(ctx context.Context) ([
 	}
 
 	return schedules, nil
+}
+
+func (db *DBRepository) AddTemporarySchedule(ctx context.Context, schedule Schedule) (int, error) {
+    var id int
+
+    err := db.pool.QueryRow(ctx,
+        `INSERT INTO schedules (day_of_week, week_type, start_time, end_time, thread_id, is_temporary)
+        VALUES ('', '', $1, $2, $3, true)
+        RETURNING id`,
+        schedule.StartTime, schedule.EndTime, schedule.ThreadID,
+    ).Scan(&id)
+
+    if err != nil {
+        return 0, err
+    }
+
+    return id, nil
 }

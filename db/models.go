@@ -14,6 +14,7 @@ type Schedule struct {
 	ThreadID int
 	ThreadDescription *string
 	QueueMesID *int
+	IsTemporary bool
 }
 
 type QueueEntry struct {

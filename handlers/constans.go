@@ -60,3 +60,18 @@ func GetBackBtnEditTime(scheduleID int) models.InlineKeyboardButton {
 
 	return BackBtnEditSch
 }
+
+var dayEnToRuShort = map[string]string{
+    "monday":    "пн",
+    "tuesday":   "вт",
+    "wednesday": "ср",
+    "thursday":  "чт",
+    "friday":    "пт",
+    "saturday":  "сб",
+    "sunday":    "вс",
+}
+
+var weekTypeEnToRuShort = map[string]string{
+    "even": "чет",
+    "odd":  "нечет",
+}

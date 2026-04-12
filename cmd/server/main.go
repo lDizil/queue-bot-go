@@ -99,8 +99,8 @@ func main() {
 		return middleware.Chain(h, adminMw)
 	}
 
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, handlers.StartHandler)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/queue", bot.MatchTypeExact, adminHandler(handlers.SendQueueMessage))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, handlers.StartHandler)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/one_shot_queue", bot.MatchTypePrefix, adminHandler(handlers.RunOneShotQueue))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "Join:", bot.MatchTypePrefix, queueHandler(handlers.JoinToPosition))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinBusySlot:", bot.MatchTypePrefix, queueHandler(handlers.JoinBusySlot))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinFirstFreeslot:", bot.MatchTypePrefix, queueHandler(handlers.JoinClosestFreeSlot))
@@ -109,7 +109,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ActualQueue", bot.MatchTypeExact, handlers.ActualQueueInfo)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "CloseQueue", bot.MatchTypeExact, handlers.QueueClosed)
 
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/edit_schedule", bot.MatchTypeExact, adminHandler(handlers.EditScheduleReplyText))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/edit_schedule", bot.MatchTypePrefix, adminHandler(handlers.EditScheduleReplyText))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "AddNewSchedule", bot.MatchTypeExact, editHandler(handlers.AddNewSchedule))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveEditSchedule", bot.MatchTypeExact, editHandler(handlers.LeaveEditSchedule))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "Back:", bot.MatchTypePrefix, editHandler(handlers.Back))

@@ -115,6 +115,7 @@ func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, upda
 		ChatID:      chatID,
 		Text:        text,
 		ReplyMarkup: markup,
+		MessageThreadID: msg.MessageThreadID,
 	})
 
 	if err != nil {

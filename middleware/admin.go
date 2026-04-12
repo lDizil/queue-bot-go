@@ -36,18 +36,18 @@ func AdminOnly(adminIDs []int64) func(bot.HandlerFunc) bot.HandlerFunc {
 			if update.CallbackQuery != nil {
 				b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 					CallbackQueryID: update.CallbackQuery.ID,
-					Text: "У вас недостаточно прав для выполнения действия",
+					Text: "У Вас недостаточно прав для выполнения действия",
 				})
 			} else {
 				username := update.Message.From.Username
 				_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 					ChatID: update.Message.Chat.ID,
 					MessageThreadID: update.Message.MessageThreadID,
-					Text:            fmt.Sprintf("У вас (пользователь %s) недостаточно прав для выполнения действия", username),
+					Text:            fmt.Sprintf("У Вас (пользователь %s) недостаточно прав для выполнения действия", username),
 				})
 
 				if err != nil {
-					log.Println("Ошибка отправки сообщения о недостаточности прав пользователю")
+					log.Println("Ошибка отправки сообщения о недостаточности прав")
 					return 
 				}
 			}

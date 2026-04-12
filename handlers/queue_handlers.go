@@ -12,21 +12,18 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
+func (h *BotHandler) RunOneShotQueue(ctx context.Context, b *bot.Bot, update *models.Update) {
+    threadID := update.Message.MessageThreadID
 
-// хендлер — вызывается библиотекой по команде /queue
-func (h *BotHandler) SendQueueMessage(ctx context.Context, b *bot.Bot, update *models.Update) {
-	username := update.Message.From.Username
+    b.SendMessage(ctx, &bot.SendMessageParams{
+        ChatID:          update.Message.Chat.ID,
+        MessageThreadID: threadID,
+        Text:            "Одноразовая очередь будет запущена через 6 минут.",
+    })
 
-	scheduleID := 2
-
-	_, err := h.sendQueueMessage(ctx, b, update.Message.Chat.ID, scheduleID, 0, u.QueueClosed)
-	if err != nil {
-		log.Printf("Ошибка при отправке очереди по /queue (пользователь %s). %v", username, err)
-		return
-	}
+    h.scheduler.RunInstant(ctx, threadID)
 }
 
-// внутренний метод — принимает scheduleID, вызывается из любого места
 func (h *BotHandler) sendQueueMessage(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int, threadID int, statusQueue u.QueueStatus) (int, error) {
 	if h.totalSlotsInQueue == 0 || h.amountOfSlotsInRow == 0 {
 		log.Println("Не заданы переменные окружения для настройки очереди")

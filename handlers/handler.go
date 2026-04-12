@@ -38,6 +38,7 @@ type BotHandler struct {
 type SchedulerManager interface {
     ScheduleNext(ctx context.Context, schedule db.Schedule)
     RemoveSchedule(scheduleID int)
+	RunInstant(ctx context.Context, threadID int)
 }
 
 func (h *BotHandler) SetScheduler(s SchedulerManager) {

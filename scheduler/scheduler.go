@@ -258,14 +258,52 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 					}
 				} else {
 					fired["close"] = true
-					s.db.ResetNotifications(ctx, schedule.ID)
+
 					schedule.Notified5min = false
 					schedule.Notified1min = false
 					schedule.NotifiedOpen = false
-					s.ScheduleNext(ctx, schedule)
+
+					if schedule.IsTemporary {
+						s.db.DeleteScheduleEntry(ctx, schedule.ID)
+						s.db.ClearQueueMessageID(ctx, schedule.ID)
+					} else {
+						s.db.ResetNotifications(ctx, schedule.ID)
+						s.ScheduleNext(ctx, schedule)
+					}
 					return
 				}
 			}
 		}
 	}
+}
+
+func (s *Scheduler) RunInstant(ctx context.Context, threadID int) {
+    moscow, _ := time.LoadLocation("Europe/Moscow")
+    now := time.Now().In(moscow)
+
+    schedule := db.Schedule{
+        ThreadID:    threadID,
+        StartTime:   now.Add(6 * time.Minute),
+        EndTime:     now.Add(6*time.Minute + 90*time.Second),
+        IsTemporary: true,
+    }
+
+    id, err := s.db.AddTemporarySchedule(ctx, schedule)
+    if err != nil {
+        log.Printf("RunInstant: ошибка создания временной записи: %v", err)
+        return
+    }
+
+    schedule.ID = id
+
+    workerCtx, cancel := context.WithCancel(ctx)
+
+    s.mu.Lock()
+    s.timers[id] = &scheduleTimer{
+        timer:  time.AfterFunc(0, func() {}),
+        cancel: cancel,
+    }
+    s.mu.Unlock()
+
+    go s.runDayWorker(workerCtx, schedule, now)
 }
