@@ -506,9 +506,10 @@ func (h *BotHandler) HandleNewTime(ctx context.Context, b *bot.Bot, update *mode
 	}
 
 	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ReplyMarkup: markup,
+		ChatID:          chatID,
+		Text:            text,
+		ReplyMarkup:     markup,
+		MessageThreadID: sch.ThreadID,
 	})
 
 	if err != nil {
@@ -592,9 +593,10 @@ func (h *BotHandler) HandleNewThreadID(ctx context.Context, b *bot.Bot, update *
 	}
 
 	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ReplyMarkup: markup,
+		ChatID:          chatID,
+		Text:            text,
+		ReplyMarkup:     markup,
+		MessageThreadID: sch.ThreadID,
 	})
 
 	if err != nil {
@@ -670,9 +672,10 @@ func (h *BotHandler) HandleNewDescription(ctx context.Context, b *bot.Bot, updat
 	}
 
 	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ReplyMarkup: markup,
+		ChatID:          chatID,
+		Text:            text,
+		ReplyMarkup:     markup,
+		MessageThreadID: sch.ThreadID,
 	})
 
 	if err != nil {
