@@ -7,6 +7,8 @@ RUN go mod download
 
 COPY . .
 
+RUN go test ./...
+
 RUN go build -o /queue_bot ./cmd/server/
 
 FROM alpine:latest
