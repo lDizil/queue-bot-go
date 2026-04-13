@@ -100,7 +100,6 @@ func (h *BotHandler) JoinClosestFreeSlot(ctx context.Context, b *bot.Bot, update
 	slot, err := h.db.JoinFirstFreeSlot(ctx, userID, username, scheduleID, h.totalSlotsInQueue)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			// либо все места заняты, либо пользователь уже в очереди
 			isInQueue, checkErr := h.db.IsUserInQueue(ctx, userID, scheduleID)
 			if checkErr == nil && isInQueue {
 				b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{

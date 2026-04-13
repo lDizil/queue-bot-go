@@ -64,7 +64,6 @@ func (h *BotHandler) isQueueOpen(schedule db.Schedule) bool {
 	end := time.Date(now.Year(), now.Month(), now.Day(),
 		schedule.EndTime.Hour(), schedule.EndTime.Minute(), 0, 0, moscow)
 
-	// если конец раньше начала — очередь переходит через полночь
 	if end.Before(start) {
 		end = end.AddDate(0, 0, 1)
 	}
@@ -86,18 +85,18 @@ func (h *BotHandler) reschedule(ctx context.Context, scheduleID int) error {
 		return nil
 	}
 
+	err := h.db.ResetNotifications(ctx, scheduleID)
+	if err != nil {
+		return err
+	}
+
 	sch, err := h.db.GetScheduleEntry(ctx, scheduleID)
 	if err != nil {
 		return err
 	}
 
-	err = h.db.ResetNotifications(ctx, scheduleID)
-	if err != nil {
-		return err
-	}
-
 	h.scheduler.RemoveSchedule(scheduleID)
-	h.scheduler.ScheduleNext(ctx, sch)
+	h.scheduler.ScheduleNext(sch)
 
 	return nil
 }
@@ -113,8 +112,12 @@ func (h *BotHandler) rescheduleWithSch(ctx context.Context, scheduleID int, sch 
 		return err
 	}
 
+	sch.Notified5min = false
+	sch.Notified1min = false
+	sch.NotifiedOpen = false
+
 	h.scheduler.RemoveSchedule(scheduleID)
-	h.scheduler.ScheduleNext(ctx, sch)
+	h.scheduler.ScheduleNext(sch)
 
 	return nil
 }

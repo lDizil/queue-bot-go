@@ -309,7 +309,7 @@ func (h *BotHandler) SendScheduledQueue(ctx context.Context, b *bot.Bot, chatID 
 
 func (h *BotHandler) EditScheduledQueue(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int, statusQueue u.QueueStatus) error {
 	isUpdated, err := h.updateQueueMessage(ctx, b, chatID, scheduleID, statusQueue)
-	if !isUpdated {
+	if !isUpdated && err != nil {
 		log.Printf("Ошибка обновления сообщения с очередью %v", err)
 	}
 	return err

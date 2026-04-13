@@ -92,6 +92,8 @@ type Scheduler struct {
 	sender QueueSender
 	chatID int64
 
+	ctx context.Context
+
 	week1Date time.Time
 	week1Type string
 
@@ -101,12 +103,13 @@ type Scheduler struct {
 	tickInterval time.Duration
 }
 
-func NewScheduler(db *db.DBRepository, b *bot.Bot, sender QueueSender, chatID int64, week1Date time.Time, week1Type string, tickInterval time.Duration) *Scheduler {
+func NewScheduler(ctx context.Context, db *db.DBRepository, b *bot.Bot, sender QueueSender, chatID int64, week1Date time.Time, week1Type string, tickInterval time.Duration) *Scheduler {
 	return &Scheduler{
 		db:           db,
 		b:            b,
 		sender:       sender,
 		chatID:       chatID,
+		ctx:          ctx,
 		week1Date:    week1Date,
 		week1Type:    week1Type,
 		timers:       make(map[int]*scheduleTimer),
@@ -128,7 +131,7 @@ func (s *Scheduler) RemoveSchedule(scheduleID int) {
 	delete(s.timers, scheduleID)
 }
 
-func (s *Scheduler) ScheduleNext(ctx context.Context, schedule db.Schedule) {
+func (s *Scheduler) ScheduleNext(schedule db.Schedule) {
 	nextDate, err := nextOccurence(schedule, s.week1Date, s.week1Type)
 	if err != nil {
 		log.Printf("scheduleNext: ошибка для расписания %d: %v", schedule.ID, err)
@@ -136,8 +139,9 @@ func (s *Scheduler) ScheduleNext(ctx context.Context, schedule db.Schedule) {
 	}
 
 	duration := time.Until(nextDate)
+	log.Printf("[sched] запись %d запланирована на %s", schedule.ID, nextDate.Format("2006-01-02"))
 
-	workerCtx, cancel := context.WithCancel(ctx)
+	workerCtx, cancel := context.WithCancel(s.ctx)
 
 	timer := time.AfterFunc(duration, func() {
 		s.runDayWorker(workerCtx, schedule, nextDate)
@@ -167,6 +171,10 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 	end := time.Date(date.Year(), date.Month(), date.Day(),
 		schedule.EndTime.Hour(), schedule.EndTime.Minute(), 0, 0, moscow)
 
+	if end.Before(start) {
+		end = end.AddDate(0, 0, 1)
+	}
+
 	t5min := start.Add(-5 * time.Minute)
 	t1min := start.Add(-1 * time.Minute)
 	tOpen := start
@@ -182,6 +190,9 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 		"close":      now.After(tClose),
 	}
 
+	log.Printf("[sched] воркер запущен: запись %d, старт %s, конец %s",
+		schedule.ID, start.Format("15:04"), end.Format("15:04"))
+
 	ticker := time.NewTicker(s.tickInterval)
 	defer ticker.Stop()
 
@@ -190,6 +201,7 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("[sched] воркер остановлен: запись %d", schedule.ID)
 			return
 		case now := <-ticker.C:
 			now = now.In(moscow)
@@ -201,9 +213,10 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 					if retries["5min"] >= 3 {
 						fired["5min"] = true
 					}
-					log.Printf("ошибка runDayWorker: %v", err)
+					log.Printf("[sched] ошибка уведомления за 5 мин (запись %d): %v", schedule.ID, err)
 				} else {
 					fired["5min"] = true
+					log.Printf("[sched] уведомление за 5 мин отправлено (запись %d)", schedule.ID)
 					s.db.SetNotified5min(ctx, schedule.ID)
 				}
 			}
@@ -211,13 +224,14 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 			if !fired["1min_notif"] && !now.Before(t1min) {
 				err := s.sender.SendNotification1min(ctx, s.b, s.chatID, schedule.ThreadID, schedule.ID)
 				if err != nil {
-					log.Printf("ошибка runDayWorker: %v", err)
+					log.Printf("[sched] ошибка уведомления за 1 мин (запись %d): %v", schedule.ID, err)
 					retries["1min_notif"]++
 					if retries["1min_notif"] >= 3 {
 						fired["1min_notif"] = true
 					}
 				} else {
 					fired["1min_notif"] = true
+					log.Printf("[sched] уведомление за 1 мин отправлено (запись %d)", schedule.ID)
 					s.db.SetNotified1min(ctx, schedule.ID)
 				}
 			}
@@ -225,13 +239,14 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 			if !fired["1min"] && fired["1min_notif"] && !now.Before(t1min) {
 				_, err := s.sender.SendScheduledQueue(ctx, s.b, s.chatID, schedule.ID, schedule.ThreadID, u.QueuePending)
 				if err != nil {
-					log.Printf("ошибка runDayWorker: %v", err)
+					log.Printf("[sched] ошибка отправки очереди (запись %d): %v", schedule.ID, err)
 					retries["1min"]++
 					if retries["1min"] >= 3 {
 						fired["1min"] = true
 					}
 				} else {
 					fired["1min"] = true
+					log.Printf("[sched] очередь отправлена (запись %d)", schedule.ID)
 					s.db.SetNotified1min(ctx, schedule.ID)
 				}
 			}
@@ -239,13 +254,14 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 			if !fired["open"] && !now.Before(tOpen) {
 				err := s.sender.EditScheduledQueue(ctx, s.b, s.chatID, schedule.ID, u.QueueOpen)
 				if err != nil {
-					log.Printf("ошибка runDayWorker: %v", err)
+					log.Printf("[sched] ошибка открытия очереди (запись %d): %v", schedule.ID, err)
 					retries["open"]++
 					if retries["open"] >= 3 {
 						fired["open"] = true
 					}
 				} else {
 					fired["open"] = true
+					log.Printf("[sched] очередь открыта (запись %d)", schedule.ID)
 					s.db.SetNotifiedOpen(ctx, schedule.ID)
 				}
 			}
@@ -253,13 +269,14 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 			if !fired["close"] && !now.Before(tClose) {
 				err := s.sender.ClearScheduledQueue(ctx, s.b, s.chatID, schedule.ID, u.QueueClosed)
 				if err != nil {
-					log.Printf("ошибка runDayWorker: %v", err)
+					log.Printf("[sched] ошибка закрытия очереди (запись %d): %v", schedule.ID, err)
 					retries["close"]++
 					if retries["close"] >= 3 {
 						fired["close"] = true
 					}
 				} else {
 					fired["close"] = true
+					log.Printf("[sched] очередь закрыта (запись %d)", schedule.ID)
 
 					schedule.Notified5min = false
 					schedule.Notified1min = false
@@ -270,7 +287,7 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 						s.db.ClearQueueMessageID(ctx, schedule.ID)
 					} else {
 						s.db.ResetNotifications(ctx, schedule.ID)
-						s.ScheduleNext(ctx, schedule)
+						s.ScheduleNext(schedule)
 					}
 					return
 				}

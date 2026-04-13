@@ -133,7 +133,7 @@ func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, upda
 	h.editMessageChats[userID] = chatID
 	h.editMu.Unlock()
 
-	newState := userState{enteredAt: time.Now(), chatID: chatID}
+	newState := userState{enteredAt: time.Now(), chatID: chatID, threadID: msg.MessageThreadID}
 
 	h.stateMu.Lock()
 	h.userState[userID] = newState
@@ -256,6 +256,10 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
 
+	h.stateMu.RLock()
+	curState := h.userState[userID]
+	h.stateMu.RUnlock()
+
 	data = strings.ToLower(data)
 	data = strings.Trim(data, " ")
 
@@ -326,7 +330,7 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	schedule.ID = id
 
 	if h.scheduler != nil {
-		h.scheduler.ScheduleNext(ctx, schedule)
+		h.scheduler.ScheduleNext(schedule)
 	} else {
 		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
 	}
@@ -351,9 +355,10 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	text, markup := h.GenerateEditMessage(schedules)
 
 	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ReplyMarkup: markup,
+		ChatID:          chatID,
+		Text:            text,
+		ReplyMarkup:     markup,
+		MessageThreadID: curState.threadID,
 	})
 
 	if err != nil {

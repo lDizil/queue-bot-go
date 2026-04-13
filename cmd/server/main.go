@@ -56,7 +56,7 @@ func main() {
 
 	handlers.SetBot(b)
 
-	sched := s.NewScheduler(database, b, handlers, int64(cfg.ChatId), week1Date, cfg.Week1Type, cfg.SchedulerTickInterval)
+	sched := s.NewScheduler(ctx, database, b, handlers, int64(cfg.ChatId), week1Date, cfg.Week1Type, cfg.SchedulerTickInterval)
 
 	schedules, err := database.GetAllSchedulesWithNotifications(ctx)
 	if err != nil {
@@ -69,7 +69,7 @@ func main() {
 		if schedule.QueueMesID != nil {
 			handlers.SetQueueMessage(schedule.ID, *schedule.QueueMesID)
 		}
-		sched.ScheduleNext(ctx, schedule)
+		sched.ScheduleNext(schedule)
 	}
 
 	adminIDStrs := strings.Split(cfg.AdminsID, ",")

@@ -37,7 +37,7 @@ type BotHandler struct {
 }
 
 type SchedulerManager interface {
-	ScheduleNext(ctx context.Context, schedule db.Schedule)
+	ScheduleNext(schedule db.Schedule)
 	RemoveSchedule(scheduleID int)
 	RunInstant(ctx context.Context, threadID int)
 }
@@ -55,6 +55,7 @@ type userState struct {
 	scheduleID int
 	enteredAt  time.Time
 	chatID     int64
+	threadID   int
 }
 
 func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay time.Duration, timeForExpiredEditSes time.Duration, week1Date time.Time, week1Type string) *BotHandler {
@@ -71,7 +72,6 @@ func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay ti
 		week1Type:          week1Type,
 	}
 
-	// восстановить queue_message_id из БД после перезапуска
 	ctx := context.Background()
 	schedules, err := db.GetAllSchedules(ctx)
 	if err != nil {
