@@ -22,6 +22,17 @@ type QueueSender interface {
 	ClearScheduledQueue(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int, statusQueue u.QueueStatus) error
 }
 
+type ScheduleStore interface {
+	SetNotified5min(ctx context.Context, scheduleID int) error
+	SetNotified1min(ctx context.Context, scheduleID int) error
+	SetNotifiedOpen(ctx context.Context, scheduleID int) error
+	DeleteScheduleEntry(ctx context.Context, scheduleID int) error
+	ClearQueueMessageID(ctx context.Context, scheduleID int) error
+	ResetNotifications(ctx context.Context, scheduleID int) error
+	GetScheduleEntry(ctx context.Context, scheduleID int) (db.Schedule, error)
+	AddTemporarySchedule(ctx context.Context, schedule db.Schedule) (int, error)
+}
+
 func dayOfWeekToWeekDay(day string) (time.Weekday, error) {
 	switch day {
 	case "monday":
@@ -87,7 +98,7 @@ type scheduleTimer struct {
 }
 
 type Scheduler struct {
-	db     *db.DBRepository
+	db     ScheduleStore
 	b      *bot.Bot
 	sender QueueSender
 	chatID int64
@@ -103,7 +114,7 @@ type Scheduler struct {
 	tickInterval time.Duration
 }
 
-func NewScheduler(ctx context.Context, db *db.DBRepository, b *bot.Bot, sender QueueSender, chatID int64, week1Date time.Time, week1Type string, tickInterval time.Duration) *Scheduler {
+func NewScheduler(ctx context.Context, db ScheduleStore, b *bot.Bot, sender QueueSender, chatID int64, week1Date time.Time, week1Type string, tickInterval time.Duration) *Scheduler {
 	return &Scheduler{
 		db:           db,
 		b:            b,
@@ -278,16 +289,9 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 					fired["close"] = true
 					log.Printf("[sched] очередь закрыта (запись %d)", schedule.ID)
 
-					schedule.Notified5min = false
-					schedule.Notified1min = false
-					schedule.NotifiedOpen = false
-
-					if schedule.IsTemporary {
-						s.db.DeleteScheduleEntry(ctx, schedule.ID)
-						s.db.ClearQueueMessageID(ctx, schedule.ID)
-					} else {
-						s.db.ResetNotifications(ctx, schedule.ID)
-						s.ScheduleNext(schedule)
+					nextSchedule, shouldSchedule := s.prepareNextScheduleAfterClose(ctx, schedule)
+					if shouldSchedule {
+						s.ScheduleNext(nextSchedule)
 					}
 					return
 				}
@@ -296,11 +300,40 @@ func (s *Scheduler) runDayWorker(ctx context.Context, schedule db.Schedule, date
 	}
 }
 
+func (s *Scheduler) prepareNextScheduleAfterClose(ctx context.Context, schedule db.Schedule) (db.Schedule, bool) {
+	if schedule.IsTemporary {
+		if err := s.db.DeleteScheduleEntry(ctx, schedule.ID); err != nil {
+			log.Printf("[sched] ошибка удаления временной записи (запись %d): %v", schedule.ID, err)
+		}
+
+		if err := s.db.ClearQueueMessageID(ctx, schedule.ID); err != nil {
+			log.Printf("[sched] ошибка очистки queue_message_id (запись %d): %v", schedule.ID, err)
+		}
+
+		return db.Schedule{}, false
+	}
+
+	if err := s.db.ResetNotifications(ctx, schedule.ID); err != nil {
+		log.Printf("[sched] ошибка сброса флагов уведомлений (запись %d): %v", schedule.ID, err)
+	}
+
+	nextSchedule, err := s.db.GetScheduleEntry(ctx, schedule.ID)
+	if err != nil {
+		log.Printf("[sched] ошибка получения актуальной записи для перепланирования (запись %d): %v", schedule.ID, err)
+		nextSchedule = schedule
+		nextSchedule.Notified5min = false
+		nextSchedule.Notified1min = false
+		nextSchedule.NotifiedOpen = false
+	}
+
+	return nextSchedule, true
+}
+
 func (s *Scheduler) RunInstant(ctx context.Context, threadID int) {
 	moscow, _ := time.LoadLocation("Europe/Moscow")
 	now := time.Now().In(moscow)
 
-	startMsk := now.Add(6 * time.Minute)
+	startMsk := now.Add(6*time.Minute)
 	endMsk := now.Add(6*time.Minute + 90*time.Minute)
 
 	startTimeOnly := time.Date(0, 1, 1, startMsk.Hour(), startMsk.Minute(), 0, 0, time.UTC)

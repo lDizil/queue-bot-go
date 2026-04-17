@@ -31,12 +31,28 @@ func (db *DBRepository) GetQueue(ctx context.Context, scheduleID int) ([]QueueEn
 
 func (db *DBRepository) GetScheduleByID(ctx context.Context, scheduleID int) (Schedule, error) {
 	row := db.pool.QueryRow(ctx,
-		"SELECT * FROM schedules WHERE id=$1",
+		`SELECT id, day_of_week, week_type, start_time, end_time, thread_id, thread_description, queue_message_id,
+		notified_5min, notified_1min, notified_open, is_temporary
+		FROM schedules
+		WHERE id=$1`,
 		scheduleID,
 	)
 
 	var schedule Schedule
-	err := row.Scan(&schedule.ID, &schedule.DayOfWeek, &schedule.WeekType, &schedule.StartTime, &schedule.EndTime, &schedule.ThreadID, &schedule.Notified5min, &schedule.Notified1min, &schedule.NotifiedOpen)
+	err := row.Scan(
+		&schedule.ID,
+		&schedule.DayOfWeek,
+		&schedule.WeekType,
+		&schedule.StartTime,
+		&schedule.EndTime,
+		&schedule.ThreadID,
+		&schedule.ThreadDescription,
+		&schedule.QueueMesID,
+		&schedule.Notified5min,
+		&schedule.Notified1min,
+		&schedule.NotifiedOpen,
+		&schedule.IsTemporary,
+	)
 
 	if err != nil {
 		return schedule, err
@@ -61,7 +77,19 @@ func (db *DBRepository) JoinQueue(ctx context.Context, entry QueueEntry) error {
 func (db *DBRepository) JoinFirstFreeSlot(ctx context.Context, userID int64, username string, scheduleID int, totalSlots int) (int, error) {
 	var position int
 
-	err := db.pool.QueryRow(ctx,
+	tx, err := db.pool.Begin(ctx)
+	if err != nil {
+		return -1, err
+	}
+
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", int64(scheduleID))
+	if err != nil {
+		return -1, err
+	}
+
+	err = tx.QueryRow(ctx,
 		`INSERT INTO queue_entries (user_id, username, schedule_id, position)
 		SELECT $1, $2, $3, free.pos
 		FROM generate_series(1, $4) AS free(pos)
@@ -77,6 +105,11 @@ func (db *DBRepository) JoinFirstFreeSlot(ctx context.Context, userID int64, use
 		userID, username, scheduleID, totalSlots,
 	).Scan(&position)
 
+	if err != nil {
+		return -1, err
+	}
+
+	err = tx.Commit(ctx)
 	if err != nil {
 		return -1, err
 	}

@@ -1,11 +1,68 @@
 package scheduler
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"queuebot/db"
 )
+
+type mockScheduleStore struct {
+	scheduleByID map[int]db.Schedule
+	getErr       error
+
+	resetCalls  int
+	getCalls    int
+	deleteCalls int
+	clearCalls  int
+}
+
+func (m *mockScheduleStore) SetNotified5min(ctx context.Context, scheduleID int) error {
+	return nil
+}
+
+func (m *mockScheduleStore) SetNotified1min(ctx context.Context, scheduleID int) error {
+	return nil
+}
+
+func (m *mockScheduleStore) SetNotifiedOpen(ctx context.Context, scheduleID int) error {
+	return nil
+}
+
+func (m *mockScheduleStore) DeleteScheduleEntry(ctx context.Context, scheduleID int) error {
+	m.deleteCalls++
+	return nil
+}
+
+func (m *mockScheduleStore) ClearQueueMessageID(ctx context.Context, scheduleID int) error {
+	m.clearCalls++
+	return nil
+}
+
+func (m *mockScheduleStore) ResetNotifications(ctx context.Context, scheduleID int) error {
+	m.resetCalls++
+	return nil
+}
+
+func (m *mockScheduleStore) GetScheduleEntry(ctx context.Context, scheduleID int) (db.Schedule, error) {
+	m.getCalls++
+	if m.getErr != nil {
+		return db.Schedule{}, m.getErr
+	}
+
+	schedule, ok := m.scheduleByID[scheduleID]
+	if !ok {
+		return db.Schedule{}, errors.New("schedule not found")
+	}
+
+	return schedule, nil
+}
+
+func (m *mockScheduleStore) AddTemporarySchedule(ctx context.Context, schedule db.Schedule) (int, error) {
+	return 0, nil
+}
 
 // dayOfWeekToWeekDay
 func TestDayOfWeekToWeekDay_AllDays(t *testing.T) {
@@ -114,6 +171,104 @@ func TestNextOccurence_NoMatch_ReturnsError(t *testing.T) {
 	_, err := nextOccurence(sch, week1Date, "odd")
 	if err == nil {
 		t.Error("ожидалась ошибка для неверного дня недели")
+	}
+}
+
+func TestPrepareNextScheduleAfterClose_UsesFreshScheduleFromDB(t *testing.T) {
+	store := &mockScheduleStore{
+		scheduleByID: map[int]db.Schedule{
+			42: {
+				ID:           42,
+				ThreadID:     25111,
+				Notified5min: false,
+				Notified1min: false,
+				NotifiedOpen: false,
+			},
+		},
+	}
+
+	s := NewScheduler(context.Background(), store, nil, nil, 0, time.Now(), "odd", time.Second)
+
+	stale := db.Schedule{
+		ID:           42,
+		ThreadID:     27543,
+		Notified5min: true,
+		Notified1min: true,
+		NotifiedOpen: true,
+	}
+
+	got, shouldSchedule := s.prepareNextScheduleAfterClose(context.Background(), stale)
+
+	if !shouldSchedule {
+		t.Fatal("ожидалось перепланирование, получено shouldSchedule=false")
+	}
+
+	if got.ThreadID != 25111 {
+		t.Fatalf("ожидался thread_id из БД 25111, получено %d", got.ThreadID)
+	}
+
+	if store.resetCalls != 1 {
+		t.Fatalf("ResetNotifications вызван %d раз(а), ожидалось 1", store.resetCalls)
+	}
+
+	if store.getCalls != 1 {
+		t.Fatalf("GetScheduleEntry вызван %d раз(а), ожидалось 1", store.getCalls)
+	}
+}
+
+func TestPrepareNextScheduleAfterClose_FallbackOnGetError(t *testing.T) {
+	store := &mockScheduleStore{getErr: errors.New("db unavailable")}
+	s := NewScheduler(context.Background(), store, nil, nil, 0, time.Now(), "odd", time.Second)
+
+	stale := db.Schedule{
+		ID:           7,
+		ThreadID:     27543,
+		Notified5min: true,
+		Notified1min: true,
+		NotifiedOpen: true,
+	}
+
+	got, shouldSchedule := s.prepareNextScheduleAfterClose(context.Background(), stale)
+
+	if !shouldSchedule {
+		t.Fatal("ожидалось перепланирование, получено shouldSchedule=false")
+	}
+
+	if got.ThreadID != stale.ThreadID {
+		t.Fatalf("ожидался fallback на старый thread_id %d, получено %d", stale.ThreadID, got.ThreadID)
+	}
+
+	if got.Notified5min || got.Notified1min || got.NotifiedOpen {
+		t.Fatal("в fallback-расписании флаги уведомлений должны быть сброшены")
+	}
+
+	if store.resetCalls != 1 {
+		t.Fatalf("ResetNotifications вызван %d раз(а), ожидалось 1", store.resetCalls)
+	}
+}
+
+func TestPrepareNextScheduleAfterClose_TemporaryDoesNotReschedule(t *testing.T) {
+	store := &mockScheduleStore{}
+	s := NewScheduler(context.Background(), store, nil, nil, 0, time.Now(), "odd", time.Second)
+
+	temporary := db.Schedule{ID: 55, IsTemporary: true}
+
+	_, shouldSchedule := s.prepareNextScheduleAfterClose(context.Background(), temporary)
+
+	if shouldSchedule {
+		t.Fatal("временная запись не должна перепланироваться")
+	}
+
+	if store.deleteCalls != 1 {
+		t.Fatalf("DeleteScheduleEntry вызван %d раз(а), ожидалось 1", store.deleteCalls)
+	}
+
+	if store.clearCalls != 1 {
+		t.Fatalf("ClearQueueMessageID вызван %d раз(а), ожидалось 1", store.clearCalls)
+	}
+
+	if store.resetCalls != 0 {
+		t.Fatalf("ResetNotifications не должен вызываться для временной записи, сейчас: %d", store.resetCalls)
 	}
 }
 

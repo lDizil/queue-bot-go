@@ -582,6 +582,14 @@ func (h *BotHandler) HandleNewThreadID(ctx context.Context, b *bot.Bot, update *
 		return
 	}
 
+	if h.scheduler != nil {
+		h.scheduler.RemoveSchedule(curState.scheduleID)
+		h.scheduler.ScheduleNext(sch)
+		log.Printf("[sched] запись %d перепланирована после изменения айди темы: новый thread_id=%d", sch.ID, sch.ThreadID)
+	} else {
+		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
+	}
+
 	text, markup := h.GenerateEditScheduleMenu(sch)
 
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
