@@ -2,8 +2,12 @@ package db
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+var ErrActiveQueueNotFound = errors.New("active queue not found")
+var ErrMultipleActiveQueuesInThread = errors.New("multiple active queues in thread")
 
 func (db *DBRepository) GetAllSchedules(ctx context.Context) ([]Schedule, error) {
 	schedules := []Schedule{}
@@ -65,6 +69,25 @@ func (db *DBRepository) GetScheduleEntry(ctx context.Context, scheduleID int) (S
 	}
 
 	return schedule, nil
+}
+
+func (db *DBRepository) GetActiveScheduleIDByThread(ctx context.Context, threadID int) (int, error) {
+	row := db.pool.QueryRow(ctx,
+		`SELECT id
+		FROM schedules
+		WHERE thread_id = $1 AND queue_message_id IS NOT NULL
+		ORDER BY queue_message_id DESC
+		LIMIT 1`,
+		threadID,
+	)
+
+	var scheduleID int
+	err := row.Scan(&scheduleID)
+	if err != nil {
+		return 0, ErrActiveQueueNotFound
+	}
+
+	return scheduleID, nil
 }
 
 func (db *DBRepository) AddNewScheduleEntry(ctx context.Context, schedule Schedule) (int, error) {

@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
 	"log"
 	"queuebot/db"
 	u "queuebot/utils"
 	"strings"
+
+	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 func (h *BotHandler) RunOneShotQueue(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -346,23 +347,29 @@ func (h *BotHandler) SendNotification1min(ctx context.Context, b *bot.Bot, chatI
 }
 
 func (h *BotHandler) ClearScheduledQueue(ctx context.Context, b *bot.Bot, chatID int64, scheduleID int, statusQueue u.QueueStatus) error {
+	var firstErr error
+
 	_, err := h.updateQueueMessage(ctx, b, chatID, scheduleID, statusQueue)
 	if err != nil {
 		log.Printf("Ошибка обновления сообщения с очередью: %v", err)
-		return err
+		firstErr = err
 	}
 
 	err = h.db.ClearQueue(ctx, scheduleID)
 	if err != nil {
 		log.Printf("Ошибка очистки очереди в базе данных: %v", err)
-		return err
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
 
 	err = h.db.ClearQueueMessageID(ctx, scheduleID)
 	if err != nil {
 		log.Printf("Ошибка удаления айди сообщения с очередью из базы данных: %v", err)
-		return err
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
 
-	return nil
+	return firstErr
 }

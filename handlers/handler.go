@@ -15,13 +15,17 @@ type BotHandler struct {
 	db *db.DBRepository
 
 	queueMessages    map[int]int
+	pendingSwaps     map[string]swapRequest
 	userState        map[int64]userState
 	editMessages     map[int64]int
 	editMessageChats map[int64]int64
 
 	queueMu sync.RWMutex
+	swapMu  sync.RWMutex
 	stateMu sync.RWMutex
 	editMu  sync.RWMutex
+
+	swapSeq uint64
 
 	updateQueue chan updateTask
 
@@ -40,6 +44,21 @@ type SchedulerManager interface {
 	ScheduleNext(schedule db.Schedule)
 	RemoveSchedule(scheduleID int)
 	RunInstant(ctx context.Context, threadID int)
+}
+
+type swapRequest struct {
+	ID                string
+	ScheduleID        int
+	ChatID            int64
+	ThreadID          int
+	MessageID         int
+	RequesterUserID   int64
+	RequesterUsername string
+	RequesterPosition int
+	TargetUserID      int64
+	TargetUsername    string
+	TargetPosition    int
+	ExpiresAt         time.Time
 }
 
 func (h *BotHandler) SetScheduler(s SchedulerManager) {
@@ -62,6 +81,7 @@ func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay ti
 	h := &BotHandler{
 		db:                 db,
 		queueMessages:      make(map[int]int),
+		pendingSwaps:       make(map[string]swapRequest),
 		userState:          make(map[int64]userState),
 		editMessages:       make(map[int64]int),
 		editMessageChats:   make(map[int64]int64),

@@ -100,11 +100,14 @@ func main() {
 	}
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, handlers.StartHandler)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/swap", bot.MatchTypePrefix, handlers.SwapRequest)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/one_shot_queue", bot.MatchTypePrefix, adminHandler(handlers.RunOneShotQueue))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "Join:", bot.MatchTypePrefix, queueHandler(handlers.JoinToPosition))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinBusySlot:", bot.MatchTypePrefix, queueHandler(handlers.JoinBusySlot))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinFirstFreeslot:", bot.MatchTypePrefix, queueHandler(handlers.JoinClosestFreeSlot))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveFromQueue:", bot.MatchTypePrefix, queueHandler(handlers.LeaveQueue))
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SwapConfirm:", bot.MatchTypePrefix, handlers.SwapConfirm)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SwapReject:", bot.MatchTypePrefix, handlers.SwapReject)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SendQueueAgain:", bot.MatchTypePrefix, queueHandlerAdmin(handlers.SendQueueAgain))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ActualQueue", bot.MatchTypeExact, handlers.ActualQueueInfo)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "CloseQueue", bot.MatchTypeExact, handlers.QueueClosed)

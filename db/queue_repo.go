@@ -2,7 +2,12 @@ package db
 
 import (
 	"context"
+	"errors"
+
+	"github.com/jackc/pgx/v5"
 )
+
+var ErrSwapStateChanged = errors.New("swap state changed")
 
 func (db *DBRepository) GetQueue(ctx context.Context, scheduleID int) ([]QueueEntry, error) {
 	rows, err := db.pool.Query(ctx, "SELECT id, user_id, username, schedule_id, position FROM queue_entries WHERE schedule_id=$1 ORDER BY position", scheduleID)
@@ -67,6 +72,115 @@ func (db *DBRepository) JoinQueue(ctx context.Context, entry QueueEntry) error {
 		entry.UserID, entry.Username, entry.ScheduleID, entry.Position,
 	)
 
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DBRepository) GetQueueEntryByUser(ctx context.Context, userID int64, scheduleID int) (QueueEntry, error) {
+	row := db.pool.QueryRow(ctx,
+		"SELECT id, user_id, username, schedule_id, position FROM queue_entries WHERE user_id=$1 AND schedule_id=$2",
+		userID, scheduleID,
+	)
+
+	var entry QueueEntry
+	err := row.Scan(&entry.ID, &entry.UserID, &entry.Username, &entry.ScheduleID, &entry.Position)
+	if err != nil {
+		return QueueEntry{}, err
+	}
+
+	return entry, nil
+}
+
+func (db *DBRepository) GetQueueEntryByPosition(ctx context.Context, position int, scheduleID int) (QueueEntry, error) {
+	row := db.pool.QueryRow(ctx,
+		"SELECT id, user_id, username, schedule_id, position FROM queue_entries WHERE position=$1 AND schedule_id=$2",
+		position, scheduleID,
+	)
+
+	var entry QueueEntry
+	err := row.Scan(&entry.ID, &entry.UserID, &entry.Username, &entry.ScheduleID, &entry.Position)
+	if err != nil {
+		return QueueEntry{}, err
+	}
+
+	return entry, nil
+}
+
+func (db *DBRepository) SwapQueuePositions(ctx context.Context, scheduleID int, requesterUserID int64, targetUserID int64, requesterExpectedPosition int, targetExpectedPosition int) error {
+	if requesterUserID == targetUserID {
+		return ErrSwapStateChanged
+	}
+
+	tx, err := db.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", int64(scheduleID))
+	if err != nil {
+		return err
+	}
+
+	var requesterPosition int
+	err = tx.QueryRow(ctx,
+		"SELECT position FROM queue_entries WHERE schedule_id=$1 AND user_id=$2 FOR UPDATE",
+		scheduleID, requesterUserID,
+	).Scan(&requesterPosition)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrSwapStateChanged
+		}
+		return err
+	}
+
+	var targetPosition int
+	err = tx.QueryRow(ctx,
+		"SELECT position FROM queue_entries WHERE schedule_id=$1 AND user_id=$2 FOR UPDATE",
+		scheduleID, targetUserID,
+	).Scan(&targetPosition)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrSwapStateChanged
+		}
+		return err
+	}
+
+	if requesterPosition != requesterExpectedPosition || targetPosition != targetExpectedPosition {
+		return ErrSwapStateChanged
+	}
+
+	const tmpPosition = 0
+
+	_, err = tx.Exec(ctx,
+		"UPDATE queue_entries SET position=$1 WHERE schedule_id=$2 AND user_id=$3",
+		tmpPosition, scheduleID, requesterUserID,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx,
+		"UPDATE queue_entries SET position=$1 WHERE schedule_id=$2 AND user_id=$3",
+		requesterExpectedPosition, scheduleID, targetUserID,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx,
+		"UPDATE queue_entries SET position=$1 WHERE schedule_id=$2 AND user_id=$3",
+		targetExpectedPosition, scheduleID, requesterUserID,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
