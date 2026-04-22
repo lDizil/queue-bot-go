@@ -47,6 +47,7 @@ func (h *BotHandler) checkIsUserInQueue(ctx context.Context, b *bot.Bot, userID 
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			Text:            "Вы уже заняли место в очереди",
 			CallbackQueryID: query.ID,
+			ShowAlert:       true,
 		})
 
 		return true, nil

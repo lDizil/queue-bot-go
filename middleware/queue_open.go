@@ -30,6 +30,7 @@ func QueueOpen(p QueueStatusProvider) func(bot.HandlerFunc) bot.HandlerFunc {
 				b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 					Text:            "Очередь закрыта. Пока вы не можете выполнять действия.",
 					CallbackQueryID: query.ID,
+					ShowAlert:       true,
 				})
 				return
 			}

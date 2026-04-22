@@ -64,7 +64,7 @@ func (h *BotHandler) ActualQueueInfo(ctx context.Context, b *bot.Bot, update *mo
 	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		CallbackQueryID: update.CallbackQuery.ID,
 		Text:            "Актуальное сообщение с очередью ниже, посмотрите там ⬇️",
-		ShowAlert:       false,
+		ShowAlert:       true,
 	})
 }
 
@@ -72,7 +72,7 @@ func (h *BotHandler) QueueClosed(ctx context.Context, b *bot.Bot, update *models
 	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		CallbackQueryID: update.CallbackQuery.ID,
 		Text:            "Очередь закрыта",
-		ShowAlert:       false,
+		ShowAlert:       true,
 	})
 }
 
@@ -110,6 +110,7 @@ func (h *BotHandler) SendQueueAgain(ctx context.Context, b *bot.Bot, update *mod
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			Text:            "Очередь закрыта. Нет смысла отображать её снова",
 			CallbackQueryID: query.ID,
+			ShowAlert:       true,
 		})
 		return
 	}
@@ -141,6 +142,7 @@ func (h *BotHandler) SendQueueAgain(ctx context.Context, b *bot.Bot, update *mod
 	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		Text:            "Новое сообщения для очереди повторно отправлено в чат",
 		CallbackQueryID: query.ID,
+		ShowAlert:       true,
 	})
 }
 

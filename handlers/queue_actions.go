@@ -62,6 +62,7 @@ func (h *BotHandler) JoinToPosition(ctx context.Context, b *bot.Bot, update *mod
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			Text:            "Место уже занято, выберите другое",
 			CallbackQueryID: query.ID,
+			ShowAlert:       true,
 		})
 		return
 	}
@@ -97,6 +98,7 @@ func (h *BotHandler) JoinToPosition(ctx context.Context, b *bot.Bot, update *mod
 	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		Text:            fmt.Sprintf("Вы успешно заняли %d в очереди\nДа прибудет с вами сила", slot),
 		CallbackQueryID: query.ID,
+		ShowAlert:       true,
 	})
 
 }
@@ -130,12 +132,14 @@ func (h *BotHandler) JoinClosestFreeSlot(ctx context.Context, b *bot.Bot, update
 				b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 					Text:            "Вы уже заняли место в очереди",
 					CallbackQueryID: query.ID,
+					ShowAlert:       true,
 				})
 			} else {
 				log.Printf("[queue] отказ: кнопка=ближайшее, очередь=%d, пользователь=%s, причина=свободных_мест_нет, заняты=[%s], свободны=[%s]", scheduleID, queueUserTag(username, userID), takenBefore, freeBefore)
 				b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 					Text:            "Все места в очереди заняты",
 					CallbackQueryID: query.ID,
+					ShowAlert:       true,
 				})
 			}
 			return
@@ -164,6 +168,7 @@ func (h *BotHandler) JoinClosestFreeSlot(ctx context.Context, b *bot.Bot, update
 	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		Text:            fmt.Sprintf("Вы успешно заняли %d в очереди\nДа прибудет с вами сила", slot),
 		CallbackQueryID: query.ID,
+		ShowAlert:       true,
 	})
 }
 
@@ -204,6 +209,7 @@ func (h *BotHandler) JoinBusySlot(ctx context.Context, b *bot.Bot, update *model
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			Text:            "Вы уже заняли место в очереди",
 			CallbackQueryID: query.ID,
+			ShowAlert:       true,
 		})
 
 		return
@@ -221,6 +227,7 @@ func (h *BotHandler) JoinBusySlot(ctx context.Context, b *bot.Bot, update *model
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			Text:            "Позиция не занята, но считается закрытой (крестик на кнопке), повторите попытку",
 			CallbackQueryID: query.ID,
+			ShowAlert:       true,
 		})
 		return
 	}
@@ -230,6 +237,7 @@ func (h *BotHandler) JoinBusySlot(ctx context.Context, b *bot.Bot, update *model
 	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		Text:            "Данное место уже занято, выберите другое",
 		CallbackQueryID: query.ID,
+		ShowAlert:       true,
 	})
 
 }
@@ -327,6 +335,7 @@ func (h *BotHandler) LeaveQueue(ctx context.Context, b *bot.Bot, update *models.
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			Text:            "Вы не находитесь в очереди",
 			CallbackQueryID: query.ID,
+			ShowAlert:       true,
 		})
 
 		return
@@ -355,5 +364,6 @@ func (h *BotHandler) LeaveQueue(ctx context.Context, b *bot.Bot, update *models.
 	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		Text:            "Вы успешно покинули очередь. Удачного дня",
 		CallbackQueryID: query.ID,
+		ShowAlert:       true,
 	})
 }
