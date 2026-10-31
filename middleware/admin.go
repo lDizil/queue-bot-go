@@ -11,13 +11,16 @@ import (
 )
 
 func getUser(update *models.Update) (int64, bool) {
-    if update.CallbackQuery != nil {
-        return update.CallbackQuery.From.ID, true
-    }
-    if update.Message != nil {
-        return update.Message.From.ID, true
-    }
-    return 0, false
+	if update == nil {
+		return 0, false
+	}
+	if update.CallbackQuery != nil {
+		return update.CallbackQuery.From.ID, true
+	}
+	if update.Message != nil && update.Message.From != nil {
+		return update.Message.From.ID, true
+	}
+	return 0, false
 }
 
 func AdminOnly(adminIDs []int64) func(bot.HandlerFunc) bot.HandlerFunc {
@@ -29,26 +32,26 @@ func AdminOnly(adminIDs []int64) func(bot.HandlerFunc) bot.HandlerFunc {
 			}
 
 			if slices.Contains(adminIDs, userID) {
-					next(ctx, b, update)
-					return
-				}
-			
+				next(ctx, b, update)
+				return
+			}
+
 			if update.CallbackQuery != nil {
 				b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 					CallbackQueryID: update.CallbackQuery.ID,
-					Text: "У Вас недостаточно прав для выполнения действия",
+					Text:            "У Вас недостаточно прав для выполнения действия",
 				})
 			} else {
 				username := update.Message.From.Username
 				_, err := b.SendMessage(ctx, &bot.SendMessageParams{
-					ChatID: update.Message.Chat.ID,
+					ChatID:          update.Message.Chat.ID,
 					MessageThreadID: update.Message.MessageThreadID,
 					Text:            fmt.Sprintf("У Вас (пользователь %s) недостаточно прав для выполнения действия", username),
 				})
 
 				if err != nil {
 					log.Println("Ошибка отправки сообщения о недостаточности прав")
-					return 
+					return
 				}
 			}
 		}

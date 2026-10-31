@@ -16,19 +16,25 @@ import (
 func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *models.InlineKeyboardMarkup) {
 	text := "Вы вошли в режим редактирования.\nМожете изменить существующие записи или добавить новые.\n\n"
 
-	curWeekType := u.WeekTypeForDate(time.Now(), h.week1Date, h.week1Type)
-	text += fmt.Sprintf("Текущий тип недели по мнению бота: %s\n", weekTypeEnToRu[curWeekType])
+	values := h.settings.Values()
+	anchor, _ := time.Parse("2006-01-02", values.Week1Date)
+	curWeekType := u.WeekTypeForDate(time.Now(), anchor, values.Week1Type)
+	text += fmt.Sprintf("Текущая неделя: %s\n", weekTypeEnToRu[curWeekType])
 	var builder strings.Builder
 
 	builder.Grow(120 + len(schedules)*30)
 	builder.WriteString(text)
 
 	keyboard := [][]models.InlineKeyboardButton{}
+	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "📅 Сменить на " + weekTypeEnToRu[u.SwitchWeekType[curWeekType]], CallbackData: fmt.Sprintf("SetCurrentWeek:%s:%s", configWeekMonday(time.Now()).Format("2006-01-02"), u.SwitchWeekType[curWeekType])}})
 
 	if len(schedules) == 0 {
 		builder.WriteString("\nНет записей для редактирования")
 	} else {
 		for _, sch := range schedules {
+			if sch.Title != "" {
+				builder.WriteString(sch.Title + "\n")
+			}
 			var btn models.InlineKeyboardButton
 			if sch.ThreadDescription == nil {
 				btn = models.InlineKeyboardButton{
@@ -43,6 +49,9 @@ func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *mode
 			}
 
 			keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
+			if sch.Title != "" {
+				keyboard[len(keyboard)-1][0].Text = sch.Title + " | " + btn.Text
+			}
 		}
 	}
 
@@ -76,11 +85,13 @@ func (h *BotHandler) GenerateEditScheduleMenu(sch db.Schedule) (string, *models.
 Неделя: %s 
 Айди темы чата: %d
 
+Заголовок: %s
 Описание: %s`,
-		dayEnToRu[sch.DayOfWeek], sch.StartTime.Format("15:04:05"), sch.EndTime.Format("15:04:05"), weekTypeEnToRu[sch.WeekType], sch.ThreadID, desc)
+		dayEnToRu[sch.DayOfWeek], sch.StartTime.Format("15:04:05"), sch.EndTime.Format("15:04:05"), weekTypeEnToRu[sch.WeekType], sch.ThreadID, sch.Title, desc)
 
 	keyboard := [][]models.InlineKeyboardButton{}
 	var btn models.InlineKeyboardButton
+	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Изменить заголовок очереди", CallbackData: fmt.Sprintf("EditTitle:%d", sch.ID)}})
 
 	btn = models.InlineKeyboardButton{
 		Text:         "Изменить день недели",

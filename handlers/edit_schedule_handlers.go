@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
 	"log"
 	"queuebot/db"
@@ -15,8 +16,14 @@ import (
 
 func (h *BotHandler) Back(ctx context.Context, b *bot.Bot, update *models.Update) {
 	query, data, chatID, userID, username := h.getAllReplyInfo(update)
+	h.stateMu.Lock()
+	session := h.userState[userID]
+	session.state = ""
+	session.scheduleID = 0
+	h.userState[userID] = session
+	h.stateMu.Unlock()
 
-	schedules, err := h.db.GetAllSchedules(ctx)
+	schedules, err := h.schedulesInChat(ctx, chatID)
 	if err != nil {
 		log.Printf("Ошибка получения очереди (пользователь %s). %v", username, err)
 		return
@@ -92,16 +99,21 @@ func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, upda
 	userID := msg.From.ID
 	chatID := msg.Chat.ID
 
-	schedules, err := h.db.GetAllSchedules(ctx)
+	schedules, err := h.schedulesInChat(ctx, chatID)
 	if err != nil {
 		log.Printf("Ошибка получения очереди (пользователь %s). %v", username, err)
 		return
 	}
 
-	h.editMu.RLock()
+	h.stateMu.Lock()
+	delete(h.userState, userID)
+	h.stateMu.Unlock()
+	h.editMu.Lock()
 	oldMesID, exists := h.editMessages[userID]
 	oldChatID, chatExists := h.editMessageChats[userID]
-	h.editMu.RUnlock()
+	delete(h.editMessages, userID)
+	delete(h.editMessageChats, userID)
+	h.editMu.Unlock()
 
 	if exists {
 		deleteChatID := chatID
@@ -133,7 +145,7 @@ func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, upda
 	h.editMessageChats[userID] = chatID
 	h.editMu.Unlock()
 
-	newState := userState{enteredAt: time.Now(), chatID: chatID, threadID: msg.MessageThreadID}
+	newState := userState{menu: "schedule", enteredAt: time.Now(), chatID: chatID, threadID: msg.MessageThreadID}
 
 	h.stateMu.Lock()
 	h.userState[userID] = newState
@@ -228,9 +240,11 @@ func (h *BotHandler) AddNewSchedule(ctx context.Context, b *bot.Bot, update *mod
 		MessageID: editMesID,
 		Text: `Пожалуйста, введите в чат данные новой записи.
 
-Вводить необходимо строго в следующем порядке: день недели, тип недели, время начала (чч:мм:сс), время конца (чч:мм:сс), айди темы чата, любое описание (по желанию).
+Порядок: день недели, тип недели, время начала, время конца, айди темы чата, описание (необязательно), заголовок очереди (необязательно).
 
-Пример: понедельник, четная, 11:00:00, 12:00:00, 1243, лабораторное занятие по devops`,
+Пример: понедельник, нечётная, 11:00, 12:30, 1243, лабораторное занятие, БГГ323 — Высоконагруженные приложения
+
+Заголовок появится первой строкой в сообщении очереди. Если описание не нужно, оставьте его поле пустым. Текст с запятыми заключайте в двойные кавычки.`,
 
 		ReplyMarkup: &models.InlineKeyboardMarkup{
 			InlineKeyboard: [][]models.InlineKeyboardButton{{backBtnMainMenu}},
@@ -260,17 +274,20 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	curState := h.userState[userID]
 	h.stateMu.RUnlock()
 
-	data = strings.ToLower(data)
-	data = strings.Trim(data, " ")
-
-	newSchData := strings.Split(data, ",")
+	reader := csv.NewReader(strings.NewReader(strings.TrimSpace(data)))
+	reader.TrimLeadingSpace = true
+	newSchData, parseErr := reader.Read()
 
 	for i := range newSchData {
 		newSchData[i] = strings.TrimSpace(newSchData[i])
 	}
+	if len(newSchData) > 1 {
+		newSchData[0] = strings.ToLower(newSchData[0])
+		newSchData[1] = strings.ToLower(newSchData[1])
+	}
 
-	if !h.isValidData(newSchData) {
-		text := "Неверный формат данных, пожалуйста повторите ввод.\n\nОжидается: <день недели>,<тип недели>,<время начала>,<время окончания>,<ID темы вашего чата>,<Описание (необязательно)>."
+	if parseErr != nil || !h.isValidData(newSchData) {
+		text := "Неверный формат данных, пожалуйста повторите ввод.\n\nОжидается: <день недели>,<тип недели>,<время начала>,<время окончания>,<ID темы вашего чата>,<Описание (необязательно)>,<Заголовок (необязательно)>."
 		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnMainMenu)
 		return
 	}
@@ -279,7 +296,7 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	if err != nil {
 		startTime, err = time.Parse("15:04", newSchData[2])
 		if err != nil {
-			text := "Неверно задано время начала, повторите ввод.\n\nОжидается: <день недели>,<тип недели>,<время начала>,<время окончания>,<ID темы вашего чата>,<Описание (необязательно)>."
+			text := "Неверно задано время начала, повторите ввод.\n\nОжидается: <день недели>,<тип недели>,<время начала>,<время окончания>,<ID темы вашего чата>,<Описание (необязательно)>,<Заголовок (необязательно)>."
 			h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnMainMenu)
 			return
 		}
@@ -289,7 +306,7 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	if err != nil {
 		endTime, err = time.Parse("15:04", newSchData[3])
 		if err != nil {
-			text := "Неверно задано время конца, повторите ввод.\n\nОжидается: <день недели>,<тип недели>,<время начала>,<время окончания>,<ID темы вашего чата>,<Описание (необязательно)>."
+			text := "Неверно задано время конца, повторите ввод.\n\nОжидается: <день недели>,<тип недели>,<время начала>,<время окончания>,<ID темы вашего чата>,<Описание (необязательно)>,<Заголовок (необязательно)>."
 			h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnMainMenu)
 			return
 		}
@@ -297,7 +314,7 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	ThreadID, _ := strconv.Atoi(newSchData[4])
 
 	var description *string
-	if len(newSchData) == 6 {
+	if len(newSchData) >= 6 {
 		description = &newSchData[5]
 	}
 
@@ -310,12 +327,20 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 		weekType = newSchData[1]
 	}
 	schedule := db.Schedule{
+		ChatID:            h.scheduleChatID(chatID),
 		DayOfWeek:         day,
 		WeekType:          weekType,
 		StartTime:         startTime,
 		EndTime:           endTime,
 		ThreadID:          ThreadID,
 		ThreadDescription: description,
+	}
+	if len(newSchData) == 7 {
+		schedule.Title = newSchData[6]
+	}
+	if schedule.ChatID == 0 {
+		h.EditMesWithError(ctx, b, chatID, editMesID, "Откройте меню в группе, где нужна очередь", backBtnMainMenu)
+		return
 	}
 
 	id, err := h.db.AddNewScheduleEntry(ctx, schedule)
@@ -328,6 +353,12 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	}
 
 	schedule.ID = id
+	h.stateMu.Lock()
+	session := h.userState[userID]
+	session.state = ""
+	session.scheduleID = 0
+	h.userState[userID] = session
+	h.stateMu.Unlock()
 
 	if h.scheduler != nil {
 		h.scheduler.ScheduleNext(schedule)
@@ -346,7 +377,7 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 		return
 	}
 
-	schedules, err := h.db.GetAllSchedules(ctx)
+	schedules, err := h.schedulesInChat(ctx, chatID)
 	if err != nil {
 		log.Printf("Ошибка получения очереди (пользователь %s). %v", username, err)
 		return
@@ -370,12 +401,6 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	h.editMessages[userID] = msg.ID
 	h.editMu.Unlock()
 
-	h.stateMu.Lock()
-	session := h.userState[userID]
-	session.state = ""
-	h.userState[userID] = session
-	h.stateMu.Unlock()
-
 	log.Printf("Сообщение для редактирования очереди (id: %d) повторно отправлено в чат", msg.ID)
 }
 
@@ -394,7 +419,7 @@ func (h *BotHandler) DeleteScheduleEntry(ctx context.Context, b *bot.Bot, update
 		return
 	}
 
-	err = h.db.DeleteScheduleEntry(ctx, scheduleID)
+	err = h.queues.Delete(ctx, scheduleID)
 
 	if err != nil {
 		msg := fmt.Sprintf("Ошибка при удалении записи из расписания (пользователь %s).\n%v", username, err)
@@ -408,7 +433,7 @@ func (h *BotHandler) DeleteScheduleEntry(ctx context.Context, b *bot.Bot, update
 		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
 	}
 
-	schedules, err := h.db.GetAllSchedules(ctx)
+	schedules, err := h.schedulesInChat(ctx, chatID)
 
 	if err != nil {
 		msg := fmt.Sprintf("Ошибка при получении записи (пользователь %s).\nОшибка: %v", username, err)
@@ -463,6 +488,19 @@ func (h *BotHandler) HandleNewTime(ctx context.Context, b *bot.Bot, update *mode
 			return
 		}
 	}
+	previous, err := h.db.GetScheduleEntry(ctx, curState.scheduleID)
+	if err != nil {
+		h.EditMesWithError(ctx, b, chatID, editMesID, "Не удалось прочитать расписание", backBtnEditTime)
+		return
+	}
+	other := previous.EndTime
+	if curState.state == "edit_end_time" {
+		other = previous.StartTime
+	}
+	if newTime.Format("15:04:05") == other.Format("15:04:05") {
+		h.EditMesWithError(ctx, b, chatID, editMesID, "Начало и конец должны отличаться", backBtnEditTime)
+		return
+	}
 
 	switch curState.state {
 	case "edit_start_time":
@@ -514,7 +552,7 @@ func (h *BotHandler) HandleNewTime(ctx context.Context, b *bot.Bot, update *mode
 		ChatID:          chatID,
 		Text:            text,
 		ReplyMarkup:     markup,
-		MessageThreadID: sch.ThreadID,
+		MessageThreadID: curState.threadID,
 	})
 
 	if err != nil {
@@ -557,8 +595,8 @@ func (h *BotHandler) HandleNewThreadID(ctx context.Context, b *bot.Bot, update *
 	var err error
 
 	newThread, err := strconv.Atoi(data)
-	if err != nil {
-		log.Printf("Ошибка при преобразовании айди темы чата в int (пользователь %s). %v", username, err)
+	if err != nil || newThread < 0 {
+		log.Printf("Неверный айди темы чата (пользователь %s)", username)
 		text := "Ошибка при преобразовании айди темы чата в int. Повторите попытку или обратитесь к модерации"
 		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditSch)
 		return
@@ -582,12 +620,8 @@ func (h *BotHandler) HandleNewThreadID(ctx context.Context, b *bot.Bot, update *
 		return
 	}
 
-	if h.scheduler != nil {
-		h.scheduler.RemoveSchedule(curState.scheduleID)
-		h.scheduler.ScheduleNext(sch)
-		log.Printf("[sched] запись %d перепланирована после изменения айди темы: новый thread_id=%d", sch.ID, sch.ThreadID)
-	} else {
-		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
+	if err := h.rescheduleWithSch(ctx, curState.scheduleID, sch); err != nil {
+		log.Printf("reschedule edited topic: %v", err)
 	}
 
 	text, markup := h.GenerateEditScheduleMenu(sch)
@@ -609,7 +643,7 @@ func (h *BotHandler) HandleNewThreadID(ctx context.Context, b *bot.Bot, update *
 		ChatID:          chatID,
 		Text:            text,
 		ReplyMarkup:     markup,
-		MessageThreadID: sch.ThreadID,
+		MessageThreadID: curState.threadID,
 	})
 
 	if err != nil {
@@ -651,6 +685,10 @@ func (h *BotHandler) HandleNewDescription(ctx context.Context, b *bot.Bot, updat
 	backBtnEditSch := GetBackBtnEditSch(curState.scheduleID)
 	var err error
 
+	if len([]rune(description)) > 500 {
+		h.EditMesWithError(ctx, b, chatID, editMesID, "Описание должно быть не длиннее 500 символов", backBtnEditSch)
+		return
+	}
 	err = h.db.ChangeDescription(ctx, curState.scheduleID, description)
 
 	if err != nil {
@@ -688,7 +726,7 @@ func (h *BotHandler) HandleNewDescription(ctx context.Context, b *bot.Bot, updat
 		ChatID:          chatID,
 		Text:            text,
 		ReplyMarkup:     markup,
-		MessageThreadID: sch.ThreadID,
+		MessageThreadID: curState.threadID,
 	})
 
 	if err != nil {

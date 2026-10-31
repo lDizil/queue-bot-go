@@ -9,4 +9,3 @@ func Chain(h bot.HandlerFunc, middlewares ...func(bot.HandlerFunc) bot.HandlerFu
 
 	return h
 }
-

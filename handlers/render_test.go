@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"queuebot/db"
+	"queuebot/queue"
 	u "queuebot/utils"
 )
 
@@ -82,7 +85,7 @@ func TestRenderQueueMessage_FullCycle(t *testing.T) {
 	foundCross := false
 	for _, row := range markup.InlineKeyboard {
 		for _, btn := range row {
-			if btn.Text == "❌" {
+			if btn.Text == "1 ⏳" {
 				foundCross = true
 			}
 		}
@@ -132,6 +135,7 @@ func TestRenderQueueMessage_SlotButtons(t *testing.T) {
 		for _, btn := range row {
 			if !strings.Contains(btn.Text, "Занять") &&
 				!strings.Contains(btn.Text, "Выйти") &&
+				!strings.Contains(btn.Text, "Сдал") &&
 				!strings.Contains(btn.Text, "Отправить") {
 				slotBtns++
 			}
@@ -154,12 +158,57 @@ func TestRenderQueueMessage_AllSlotsTaken(t *testing.T) {
 	crossCount := 0
 	for _, row := range markup.InlineKeyboard {
 		for _, btn := range row {
-			if btn.Text == "❌" {
+			if strings.HasPrefix(btn.CallbackData, "CompleteSlot:") {
 				crossCount++
 			}
 		}
 	}
 	if crossCount != 3 {
 		t.Errorf("ожидалось 3 кнопки ❌, получили %d", crossCount)
+	}
+}
+
+func TestRenderQueue_TitleAndCompletion(t *testing.T) {
+	h := newTestHandler(5, 5)
+	text, markup := h.renderQueue(queue.Snapshot{Schedule: db.Schedule{ID: 7, Title: "БГГ323 — Высоконагруженные приложения", ActiveCapacity: 5, ActiveColumns: 5}, Entries: []db.QueueEntry{{ID: 101, Position: 2, Username: "bob", Completed: true}}, Status: u.QueueOpen})
+	if !strings.HasPrefix(text, "БГГ323 — Высоконагруженные приложения\n\nЭто сообщение") {
+		t.Fatalf("unexpected heading: %q", text)
+	}
+	if !strings.Contains(text, "2. @bob ✅\n") {
+		t.Fatalf("completion must follow name: %q", text)
+	}
+	button := markup.InlineKeyboard[0][1]
+	if button.Text != "2 ✅" || button.CallbackData != "CompleteSlot:7:101:2:false" {
+		t.Fatalf("completion button must carry participant identity and target state: %+v", button)
+	}
+}
+
+func TestRenderQueue_TelegramLengthLimit(t *testing.T) {
+	h := newTestHandler(90, 8)
+	for _, username := range []bool{false, true} {
+		var entries []db.QueueEntry
+		for i := 1; i <= 90; i++ {
+			entry := db.QueueEntry{ID: i, Position: i, DisplayName: strings.Repeat("😀", 128), Completed: true}
+			if username {
+				entry.Username = strings.Repeat("a", 32)
+			}
+			entries = append(entries, entry)
+		}
+		text, markup := h.renderQueue(queue.Snapshot{Schedule: db.Schedule{ID: 7, Title: strings.Repeat("😀", 200), ActiveCapacity: 90, ActiveColumns: 8}, Entries: entries, Status: u.QueueClosed})
+		if length := len(utf16.Encode([]rune(text))); length > 4096 {
+			t.Fatalf("message exceeds Telegram limit: %d", length)
+		}
+		for _, entry := range entries {
+			if !strings.Contains(text, fmt.Sprintf("%d. ", entry.Position)) {
+				t.Fatalf("missing participant %d", entry.Position)
+			}
+		}
+		for _, row := range markup.InlineKeyboard {
+			for _, button := range row {
+				if len(button.CallbackData) > 64 {
+					t.Fatalf("callback exceeds Telegram limit: %q", button.CallbackData)
+				}
+			}
+		}
 	}
 }

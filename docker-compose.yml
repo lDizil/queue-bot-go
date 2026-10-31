@@ -45,6 +45,7 @@ services:
   queuebot:
     container_name: queuebot
     restart: unless-stopped
+    stop_grace_period: 1m
     build: 
       context: .
       dockerfile: Dockerfile

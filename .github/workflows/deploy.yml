@@ -1,43 +1,125 @@
-name: QueueBot Go — Auto Deploy
+name: QueueBot checks and deploy
 
 on:
+  pull_request:
+    branches: [main]
   push:
-    branches:
-      - main
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: queuebot-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOTOOLCHAIN: local
 
 jobs:
-  deploy:
-    name: Deploy to Server
+  unit:
+    name: Unit tests and vet
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version: '1.25.x'
+      - run: go mod verify
+      - run: go vet ./...
+      - run: go test -race -count=1 -timeout=3m ./...
 
-      - name: Deploy to Server
-        uses: appleboy/ssh-action@master
+  integration:
+    name: PostgreSQL integration and regression tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: queuebot
+          POSTGRES_PASSWORD: queuebot_test
+          POSTGRES_DB: queuebot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U queuebot -d queuebot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      QUEUEBOT_TEST_DATABASE_URL: postgres://queuebot:queuebot_test@localhost:5432/queuebot_test?sslmode=disable
+      QUEUEBOT_REQUIRE_DATABASE: '1'
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version: '1.25.x'
+      - run: go test -race -count=1 -timeout=5m ./...
+
+  build:
+    name: Binary and container build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version: '1.25.x'
+      - run: go build -trimpath -o "$RUNNER_TEMP/queue_bot" ./cmd/server
+      - run: docker build --tag queuebot:ci .
+      - name: Check container contents
+        run: |
+          docker run --rm --entrypoint /bin/sh queuebot:ci -ec '
+            test -x /queue_bot
+            test -s /app/config.yaml
+            test -f /app/migrations/000001_create_schedules.up.sql
+            test ! -e /app/.env
+          '
+
+  deploy:
+    name: Deploy checked main commit
+    needs: [unit, integration, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.GO_BOT_SERVER_HOST }}
           username: ${{ secrets.GO_BOT_SERVER_USER }}
           key: ${{ secrets.GO_BOT_SSH_PRIVATE_KEY }}
+          envs: DEPLOY_SHA
+          command_timeout: 20m
           script: |
+            set -eu
             cd ~/queue-bot-go
             git fetch origin main
-            git reset --hard origin/main
+            if [ "$(git rev-parse origin/main)" != "$DEPLOY_SHA" ]; then
+              echo "Skipping superseded commit $DEPLOY_SHA"
+              exit 0
+            fi
+            git reset --hard "$DEPLOY_SHA"
             git clean -fd
-            docker compose down
-            docker compose build
-            docker compose up -d
-            echo '--- Deployment complete. Container logs: ---'
-            sleep 3
-            docker logs queuebot --tail 20
-
-      - name: Verify Deployment
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.GO_BOT_SERVER_HOST }}
-          username: ${{ secrets.GO_BOT_SERVER_USER }}
-          key: ${{ secrets.GO_BOT_SSH_PRIVATE_KEY }}
-          script: |
-            cd ~/queue-bot-go
-            git log --oneline -3
-            docker ps
+            wait_for_ready() {
+              queuebot_container="$1"
+              queuebot_attempt=0
+              while [ "$queuebot_attempt" -lt 60 ]; do
+                queuebot_state="$(docker inspect --format '{{.State.Status}}:{{.State.Restarting}}:{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$queuebot_container")"
+                if [ "$queuebot_state" = 'running:false:healthy' ]; then
+                  return 0
+                fi
+                queuebot_attempt=$((queuebot_attempt + 1))
+                sleep 2
+              done
+              docker logs "$queuebot_container" --tail 30
+              return 1
+            }
+            docker compose build queuebot
+            docker compose up -d queuebot
+            wait_for_ready queuebot
+            docker compose ps

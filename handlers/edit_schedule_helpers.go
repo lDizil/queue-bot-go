@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"maps"
+	"queuebot/db"
 	"strconv"
 	"time"
 
@@ -31,7 +31,7 @@ func (h *BotHandler) EditMesWithError(ctx context.Context, b *bot.Bot, chatID in
 }
 
 func (h *BotHandler) isValidData(data []string) bool {
-	if len(data) == 0 || len(data) > 6 || len(data) < 5 {
+	if len(data) > 7 || len(data) < 5 {
 		return false
 	}
 
@@ -69,6 +69,21 @@ func (h *BotHandler) isValidData(data []string) bool {
 	if err != nil {
 		return false
 	}
+	threadID, _ := strconv.Atoi(data[4])
+	if threadID < 0 {
+		return false
+	}
+	start, _ := parseScheduleTime(data[2])
+	end, _ := parseScheduleTime(data[3])
+	if start.Equal(end) {
+		return false
+	}
+	if len(data) >= 6 && len([]rune(data[5])) > 500 {
+		return false
+	}
+	if len(data) == 7 && len([]rune(data[6])) > 200 {
+		return false
+	}
 
 	return true
 }
@@ -101,37 +116,86 @@ func (h *BotHandler) ReturnToEditSchMenu(ctx context.Context, b *bot.Bot, schedu
 }
 
 func (h *BotHandler) isExpiredUserEditSes(timeForExpiredEditSes time.Duration) {
-	h.stateMu.RLock()
-	snapshot := make(map[int64]userState, len(h.userState))
-	maps.Copy(snapshot, h.userState)
-	h.stateMu.RUnlock()
-
-	for userID, s := range snapshot {
-		if time.Since(s.enteredAt) > timeForExpiredEditSes {
-			h.editMu.RLock()
-			editMesID, _ := h.editMessages[userID]
-			h.editMu.RUnlock()
-
-			_, err := h.b.EditMessageText(context.Background(), &bot.EditMessageTextParams{
-				ChatID:    s.chatID,
-				MessageID: editMesID,
-				Text:      "Сессия редактирования завершена по таймауту",
-			})
-
-			if err != nil {
-				log.Printf("Ошибка завершения сессии редактирования пользователя с id: %d, err: %v", userID, err)
-			} else {
-				log.Printf("Сессия редактирования пользователя с id: %d завершена", userID)
-			}
-
-			h.editMu.Lock()
-			delete(h.editMessages, userID)
-			delete(h.editMessageChats, userID)
-			h.editMu.Unlock()
-
-			h.stateMu.Lock()
-			delete(h.userState, userID)
-			h.stateMu.Unlock()
+	h.editActionMu.Lock()
+	defer h.editActionMu.Unlock()
+	h.configMu.Lock()
+	defer h.configMu.Unlock()
+	type expiredMenu struct {
+		chatID    int64
+		messageID int
+	}
+	var expired []expiredMenu
+	h.stateMu.Lock()
+	h.editMu.Lock()
+	for userID, session := range h.userState {
+		if time.Since(session.enteredAt) <= timeForExpiredEditSes {
+			continue
+		}
+		expired = append(expired, expiredMenu{session.chatID, h.editMessages[userID]})
+		delete(h.userState, userID)
+		delete(h.editMessages, userID)
+		delete(h.editMessageChats, userID)
+	}
+	h.editMu.Unlock()
+	h.stateMu.Unlock()
+	if h.b == nil {
+		return
+	}
+	for _, menu := range expired {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := h.b.EditMessageText(ctx, &bot.EditMessageTextParams{ChatID: menu.chatID, MessageID: menu.messageID, Text: "Сессия редактирования завершена по таймауту"})
+		cancel()
+		if err != nil {
+			log.Printf("expire editing menu: %v", err)
 		}
 	}
+}
+
+func parseScheduleTime(value string) (time.Time, error) {
+	parsed, err := time.Parse("15:04:05", value)
+	if err != nil {
+		return time.Parse("15:04", value)
+	}
+	return parsed, nil
+}
+
+func (h *BotHandler) scheduleChatID(chatID int64) int64 {
+	if chatID > 0 {
+		return h.defaultChatID
+	}
+	return chatID
+}
+
+func (h *BotHandler) schedulesInChat(ctx context.Context, chatID int64) ([]db.Schedule, error) {
+	schedules, err := h.db.GetAllSchedules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if chatID > 0 {
+		return schedules, nil
+	}
+	var filtered []db.Schedule
+	for _, schedule := range schedules {
+		if schedule.ChatID == chatID {
+			filtered = append(filtered, schedule)
+		}
+	}
+	return filtered, nil
+}
+
+func (h *BotHandler) ValidateEditSession(userID, chatID int64, threadID, messageID int) bool {
+	h.stateMu.Lock()
+	defer h.stateMu.Unlock()
+	session, ok := h.userState[userID]
+	if !ok || session.chatID != chatID || session.threadID != threadID || time.Since(session.enteredAt) > h.settings.Values().TimeForExpiredEditSes {
+		return false
+	}
+	h.editMu.RLock()
+	matches := h.editMessages[userID] == messageID && h.editMessageChats[userID] == chatID
+	h.editMu.RUnlock()
+	if matches {
+		session.enteredAt = time.Now()
+		h.userState[userID] = session
+	}
+	return matches
 }
