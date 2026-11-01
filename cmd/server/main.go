@@ -2,131 +2,125 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
-	c "queuebot/config"
-	db "queuebot/db"
-	h "queuebot/handlers"
-	"queuebot/middleware"
-	s "queuebot/scheduler"
+	"queuebot/config"
+	"queuebot/db"
+	"queuebot/handlers"
+	"queuebot/queue"
+	"queuebot/scheduler"
+	"queuebot/settings"
 
 	"github.com/go-telegram/bot"
 )
 
+const readinessPath = "/tmp/queuebot-ready"
+
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
+	if err := run(); err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	if err := os.Remove(readinessPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("clear previous readiness state: %w", err)
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	cfg, err := c.Load()
-
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Printf("Ошибка чтения переменных viper-ом: %v", err)
-		return
+		return fmt.Errorf("load configuration: %w", err)
 	}
-
-	databaseUrl := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s?sslmode=disable", cfg.DBUser, cfg.DBPass, cfg.DBHost, cfg.DBPort, cfg.DBName)
-
-	pool, err := db.SetUpDBConn(databaseUrl)
+	databaseURL := url.URL{Scheme: "postgres", User: url.UserPassword(cfg.DBUser, cfg.DBPass), Host: net.JoinHostPort(cfg.DBHost, cfg.DBPort), Path: "/" + cfg.DBName, RawQuery: "sslmode=disable"}
+	pool, err := db.SetUpDBConn(databaseURL.String())
 	if err != nil {
-		log.Fatal("Ошибка подключения к БД:", err)
+		return fmt.Errorf("connect to database: %w", err)
 	}
-
-	err = db.RunMigrations(databaseUrl)
+	defer pool.Close()
+	if err := db.RunMigrations(databaseURL.String()); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+	repository := db.NewDBRepo(pool)
+	if err := repository.BackfillChatIDs(ctx, int64(cfg.ChatId)); err != nil {
+		return fmt.Errorf("initialize schedule chats: %w", err)
+	}
+	manager, err := settings.NewManager(ctx, repository, cfg.Settings)
 	if err != nil {
-		log.Fatal("Ошибка миграций:", err)
+		return fmt.Errorf("load runtime settings: %w", err)
 	}
-
-	week1Date, err := time.Parse("2006-01-02", cfg.Week1Date)
+	adminIDs, err := parseAdminIDs(cfg.AdminsID, cfg.DeveloperUserID)
 	if err != nil {
-		log.Fatal("Ошибка парсинга даты первой недели:", err)
+		return err
 	}
-
-	database := db.NewDBRepo(pool)
-	handlers := h.NewBotHandler(database, cfg.TotalSlotsInQueue, cfg.AmountOfButtonsInRow, cfg.DelayUpdateQueue, cfg.TimeForExpiredEditSes, week1Date, cfg.Week1Type)
-
-	b, err := bot.New(cfg.TelegramToken, bot.WithInitialOffset(-1), bot.WithDefaultHandler(handlers.StateHandler))
-
+	h := handlers.NewBotHandler(ctx, repository, manager, cfg.DeveloperUserID, adminIDs)
+	h.SetDefaultChatID(int64(cfg.ChatId))
+	b, err := h.NewTelegramBot(cfg.TelegramToken, bot.WithSkipGetMe(), bot.WithHTTPClient(30*time.Second, &http.Client{Timeout: 40 * time.Second}))
 	if err != nil {
-		log.Fatal("Ошибка при создании бота:", err)
+		return fmt.Errorf("initialize Telegram bot: %w", err)
 	}
-
-	handlers.SetBot(b)
-
-	sched := s.NewScheduler(ctx, database, b, handlers, int64(cfg.ChatId), week1Date, cfg.Week1Type, cfg.SchedulerTickInterval)
-
-	schedules, err := database.GetAllSchedulesWithNotifications(ctx)
-	if err != nil {
-		log.Fatal("Ошибка загрузки расписаний:", err)
-	}
-
-	handlers.SetScheduler(sched)
-
-	for _, schedule := range schedules {
-		if schedule.QueueMesID != nil {
-			handlers.SetQueueMessage(schedule.ID, *schedule.QueueMesID)
+	var queues *queue.Service
+	defer func() {
+		cancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		if err := h.Shutdown(shutdownCtx); err != nil {
+			log.Printf("drain Telegram updates: %v", err)
 		}
-		sched.ScheduleNext(schedule)
-	}
-
-	adminIDStrs := strings.Split(cfg.AdminsID, ",")
-	adminIDs := make([]int64, 0, len(adminIDStrs))
-	for _, s := range adminIDStrs {
-		id, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-		if err != nil {
-			log.Fatalf("Неверный формат ID администратора: %q", s)
+		if queues != nil {
+			queues.Stop()
 		}
-		adminIDs = append(adminIDs, id)
+	}()
+	initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
+	me, err := b.GetMe(initCtx)
+	initCancel()
+	if err != nil {
+		return fmt.Errorf("initialize Telegram bot: %w", err)
 	}
-
-	adminMw := middleware.AdminOnly(adminIDs)
-	editSesMw := middleware.EditSession(handlers)
-	queueOpenMw := middleware.QueueOpen(handlers)
-
-	editHandler := func(h bot.HandlerFunc) bot.HandlerFunc {
-		return middleware.Chain(h, adminMw, editSesMw)
+	h.SetBot(b)
+	queues = queue.NewService(context.WithoutCancel(ctx), repository, manager, h)
+	h.SetQueueService(queues)
+	sched := scheduler.NewScheduler(ctx, repository, queues, manager)
+	h.SetScheduler(sched)
+	h.RegisterHandlers(b, me.Username)
+	if err := sched.Start(ctx); err != nil {
+		return fmt.Errorf("restore schedules: %w", err)
 	}
-	queueHandler := func(h bot.HandlerFunc) bot.HandlerFunc {
-		return middleware.Chain(h, queueOpenMw)
+	if err := os.WriteFile(readinessPath, []byte("ready\n"), 0600); err != nil {
+		return fmt.Errorf("mark initialized bot ready: %w", err)
 	}
-	queueHandlerAdmin := func(h bot.HandlerFunc) bot.HandlerFunc {
-		return middleware.Chain(h, queueOpenMw, adminMw)
-	}
-	adminHandler := func(h bot.HandlerFunc) bot.HandlerFunc {
-		return middleware.Chain(h, adminMw)
-	}
-
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, handlers.StartHandler)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/swap", bot.MatchTypePrefix, handlers.SwapRequest)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/one_shot_queue", bot.MatchTypePrefix, adminHandler(handlers.RunOneShotQueue))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "Join:", bot.MatchTypePrefix, queueHandler(handlers.JoinToPosition))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinBusySlot:", bot.MatchTypePrefix, queueHandler(handlers.JoinBusySlot))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "JoinFirstFreeslot:", bot.MatchTypePrefix, queueHandler(handlers.JoinClosestFreeSlot))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveFromQueue:", bot.MatchTypePrefix, queueHandler(handlers.LeaveQueue))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SwapConfirm:", bot.MatchTypePrefix, handlers.SwapConfirm)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SwapReject:", bot.MatchTypePrefix, handlers.SwapReject)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "SendQueueAgain:", bot.MatchTypePrefix, queueHandlerAdmin(handlers.SendQueueAgain))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ActualQueue", bot.MatchTypeExact, handlers.ActualQueueInfo)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "CloseQueue", bot.MatchTypeExact, handlers.QueueClosed)
-
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/edit_schedule", bot.MatchTypePrefix, adminHandler(handlers.EditScheduleReplyText))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "AddNewSchedule", bot.MatchTypeExact, editHandler(handlers.AddNewSchedule))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "LeaveEditSchedule", bot.MatchTypeExact, editHandler(handlers.LeaveEditSchedule))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "Back:", bot.MatchTypePrefix, editHandler(handlers.Back))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditSchedule:", bot.MatchTypePrefix, editHandler(handlers.EditScheduleEntry))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "DeleteEntry:", bot.MatchTypePrefix, editHandler(handlers.DeleteScheduleEntry))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditTypeOfWeek:", bot.MatchTypePrefix, editHandler(handlers.ChangeWeekType))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditDayOfWeek:", bot.MatchTypePrefix, editHandler(handlers.GenerateChangeWeekDayMenu))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "ChWeekDay:", bot.MatchTypePrefix, editHandler(handlers.ChangeWeekDay))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditTime:", bot.MatchTypePrefix, editHandler(handlers.EditTimeMenu))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "HandleTime", bot.MatchTypePrefix, editHandler(handlers.EditTime))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditThreadID:", bot.MatchTypePrefix, editHandler(handlers.EditThreadID))
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "EditDescription:", bot.MatchTypePrefix, editHandler(handlers.EditDescription))
-
-	log.Println("Бот запущен и готов к работе")
-
+	defer os.Remove(readinessPath)
+	log.Print("Бот запущен и готов к работе")
 	b.Start(ctx)
+	return nil
+}
+
+func parseAdminIDs(raw string, developerID int64) ([]int64, error) {
+	ids := []int64{developerID}
+	for _, value := range strings.Split(raw, ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("AUTHORIZED_USER_ID must contain positive Telegram user IDs")
+		}
+		if id != developerID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }

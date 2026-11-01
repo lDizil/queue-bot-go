@@ -28,11 +28,17 @@ func SetUpDBConn(databaseUrl string) (*pgxpool.Pool, error) {
 }
 
 func RunMigrations(databaseUrl string) error {
-	m, err := migrate.New("file://migrations", databaseUrl)
+	return runMigrations(databaseUrl, "file://migrations")
+}
+
+func runMigrations(databaseUrl, sourceURL string) error {
+	m, err := migrate.New(sourceURL, databaseUrl)
 
 	if err != nil {
 		return err
 	}
+
+	defer m.Close()
 
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		return err

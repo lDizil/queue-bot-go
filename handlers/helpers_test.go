@@ -17,6 +17,7 @@ func TestIsValidData_Valid(t *testing.T) {
 		{"пятница", "нечётная", "08:00:00", "10:00:00", "456"},
 		{"friday", "odd", "18:00", "20:00", "1"},
 		{"среда", "четная", "14:00", "16:00", "42", "описание"},
+		{"среда", "четная", "14:00", "16:00", "42", "описание", "БГГ323"},
 	}
 
 	for _, data := range cases {
@@ -35,7 +36,9 @@ func TestIsValidData_Invalid(t *testing.T) {
 	}{
 		{"пустой слайс", []string{}},
 		{"слишком мало полей", []string{"понедельник", "чётная", "10:00"}},
-		{"слишком много полей", []string{"понедельник", "чётная", "10:00", "12:00", "1", "desc", "extra"}},
+		{"слишком много полей", []string{"понедельник", "чётная", "10:00", "12:00", "1", "desc", "title", "extra"}},
+		{"одинаковое время", []string{"понедельник", "чётная", "10:00", "10:00", "1"}},
+		{"отрицательная тема", []string{"понедельник", "чётная", "10:00", "12:00", "-1"}},
 		{"неверный день", []string{"воскресение_опечатка", "чётная", "10:00", "12:00", "1"}},
 		{"неверный тип недели", []string{"понедельник", "какаяТо", "10:00", "12:00", "1"}},
 		{"неверный формат времени начала", []string{"понедельник", "чётная", "25:00", "12:00", "1"}},
@@ -60,11 +63,21 @@ func makeScheduleWithTimes(startH, startM, endH, endM int) db.Schedule {
 	}
 }
 
-func TestIsQueueOpen_WideWindow_AlwaysOpen(t *testing.T) {
+func TestIsQueueOpen_RequiresCurrentRun(t *testing.T) {
 	h := &BotHandler{}
 	sch := makeScheduleWithTimes(0, 1, 23, 58)
+	if h.isQueueOpen(sch) {
+		t.Fatal("hours alone must not open a queue")
+	}
+	start, end := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
+	messageID := 123
+	sch.ActiveOpensAt, sch.ActiveClosesAt, sch.QueueMesID = &start, &end, &messageID
 	if !h.isQueueOpen(sch) {
-		t.Error("ожидалась открытая очередь для окна 00:01–23:58")
+		t.Fatal("current published run should be open")
+	}
+	start, end = start.AddDate(0, 0, -1), end.AddDate(0, 0, -1)
+	if h.isQueueOpen(sch) {
+		t.Fatal("yesterday's queue must stay closed at the same clock time")
 	}
 }
 

@@ -13,12 +13,23 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+var migrateTestOnce sync.Once
+var migrateTestErr error
+
 func newTestDBRepo(t *testing.T) *DBRepository {
 	t.Helper()
 
 	databaseURL := os.Getenv("QUEUEBOT_TEST_DATABASE_URL")
 	if databaseURL == "" {
+		if os.Getenv("QUEUEBOT_REQUIRE_DATABASE") == "1" {
+			t.Fatal("QUEUEBOT_TEST_DATABASE_URL is required in integration CI")
+		}
 		t.Skip("set QUEUEBOT_TEST_DATABASE_URL to run db integration tests")
+	}
+
+	migrateTestOnce.Do(func() { migrateTestErr = runMigrations(databaseURL, "file://../migrations") })
+	if migrateTestErr != nil {
+		t.Fatalf("RunMigrations: %v", migrateTestErr)
 	}
 
 	pool, err := SetUpDBConn(databaseURL)
@@ -26,6 +37,10 @@ func newTestDBRepo(t *testing.T) *DBRepository {
 		t.Fatalf("SetUpDBConn: %v", err)
 	}
 
+	if err := pool.Ping(context.Background()); err != nil {
+		pool.Close()
+		t.Fatalf("database is unavailable: %v", err)
+	}
 	t.Cleanup(pool.Close)
 
 	return NewDBRepo(pool)

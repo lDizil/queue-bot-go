@@ -4,6 +4,11 @@ import (
 	"context"
 	"log"
 	"queuebot/db"
+	"queuebot/dispatch"
+	"queuebot/queue"
+	"queuebot/settings"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,36 +19,38 @@ import (
 type BotHandler struct {
 	db *db.DBRepository
 
-	queueMessages    map[int]int
 	pendingSwaps     map[string]swapRequest
 	userState        map[int64]userState
 	editMessages     map[int64]int
 	editMessageChats map[int64]int64
 
-	queueMu sync.RWMutex
 	swapMu  sync.RWMutex
 	stateMu sync.RWMutex
 	editMu  sync.RWMutex
 
-	swapSeq uint64
-
-	updateQueue chan updateTask
+	configMu      sync.Mutex
+	editActionMu  sync.Mutex
+	settings      *settings.Manager
+	queues        *queue.Service
+	developerID   int64
+	adminIDs      map[int64]bool
+	defaultChatID int64
+	ctx           context.Context
 
 	totalSlotsInQueue  int
 	amountOfSlotsInRow int
 
 	b *bot.Bot
 
-	scheduler SchedulerManager
-
-	week1Date time.Time
-	week1Type string
+	scheduler  SchedulerManager
+	dispatcher *dispatch.Dispatcher
 }
 
 type SchedulerManager interface {
 	ScheduleNext(schedule db.Schedule)
 	RemoveSchedule(scheduleID int)
-	RunInstant(ctx context.Context, threadID int)
+	RunInstant(ctx context.Context, chatID int64, threadID int, title string) error
+	Reconfigure() error
 }
 
 type swapRequest struct {
@@ -55,9 +62,12 @@ type swapRequest struct {
 	RequesterUserID   int64
 	RequesterUsername string
 	RequesterPosition int
+	RequesterEntryID  int
 	TargetUserID      int64
 	TargetUsername    string
 	TargetPosition    int
+	TargetEntryID     int
+	QueueMessageID    int
 	ExpiresAt         time.Time
 }
 
@@ -67,6 +77,7 @@ func (h *BotHandler) SetScheduler(s SchedulerManager) {
 
 func (h *BotHandler) SetBot(b *bot.Bot) {
 	h.b = b
+	go h.expireSessions(h.ctx)
 }
 
 type userState struct {
@@ -75,37 +86,29 @@ type userState struct {
 	enteredAt  time.Time
 	chatID     int64
 	threadID   int
+	menu       string
+	configKey  string
 }
 
-func NewBotHandler(db *db.DBRepository, totalSlots int, slotsInRow int, delay time.Duration, timeForExpiredEditSes time.Duration, week1Date time.Time, week1Type string) *BotHandler {
+func NewBotHandler(ctx context.Context, database *db.DBRepository, cfg *settings.Manager, developerID int64, adminIDs []int64) *BotHandler {
+	values := cfg.Values()
 	h := &BotHandler{
-		db:                 db,
-		queueMessages:      make(map[int]int),
+		db:                 database,
 		pendingSwaps:       make(map[string]swapRequest),
 		userState:          make(map[int64]userState),
 		editMessages:       make(map[int64]int),
 		editMessageChats:   make(map[int64]int64),
-		updateQueue:        make(chan updateTask, 100),
-		totalSlotsInQueue:  totalSlots,
-		amountOfSlotsInRow: slotsInRow,
-		week1Date:          week1Date,
-		week1Type:          week1Type,
+		totalSlotsInQueue:  values.TotalSlotsInQueue,
+		amountOfSlotsInRow: values.AmountOfButtonsInRow,
+		settings:           cfg,
+		developerID:        developerID,
+		adminIDs:           make(map[int64]bool),
+		ctx:                ctx,
 	}
-
-	ctx := context.Background()
-	schedules, err := db.GetAllSchedules(ctx)
-	if err != nil {
-		log.Println("Предупреждение: не удалось загрузить queue_message_id из БД:", err)
-	} else {
-		for _, s := range schedules {
-			if s.QueueMesID != nil {
-				h.queueMessages[s.ID] = *s.QueueMesID
-			}
-		}
+	for _, id := range adminIDs {
+		h.adminIDs[id] = true
 	}
-
-	go h.updateWorker(delay, timeForExpiredEditSes)
-
+	h.adminIDs[developerID] = true
 	return h
 }
 
@@ -119,11 +122,13 @@ func (h *BotHandler) handleError(ctx context.Context, b *bot.Bot, callbackID str
 }
 
 func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	h.editActionMu.Lock()
+	defer h.editActionMu.Unlock()
 	if update == nil {
 		return
 	}
 
-	if update.Message == nil {
+	if update.Message == nil || update.Message.From == nil || update.Message.Text == "" || strings.HasPrefix(update.Message.Text, "/") {
 		return
 	}
 
@@ -132,6 +137,16 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 	h.stateMu.RLock()
 	curState := h.userState[userID]
 	h.stateMu.RUnlock()
+	if curState.chatID != update.Message.Chat.ID || curState.threadID != update.Message.MessageThreadID || time.Since(curState.enteredAt) > h.settings.Values().TimeForExpiredEditSes {
+		return
+	}
+	if !h.adminIDs[userID] {
+		return
+	}
+	h.stateMu.Lock()
+	curState.enteredAt = time.Now()
+	h.userState[userID] = curState
+	h.stateMu.Unlock()
 
 	switch curState.state {
 	case "awaiting_schedule":
@@ -148,6 +163,10 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 
 	case "edit_description":
 		h.HandleNewDescription(ctx, b, update)
+	case "edit_title":
+		h.HandleNewTitle(ctx, b, update)
+	case "edit_config":
+		h.HandleConfigInput(ctx, b, update)
 	}
 }
 
@@ -162,8 +181,87 @@ func (h *BotHandler) getAllReplyInfo(update *models.Update) (*models.CallbackQue
 	return query, data, chatID, userID, username
 }
 
-func (h *BotHandler) SetQueueMessage(scheduleID, messageID int) {
-	h.queueMu.Lock()
-	h.queueMessages[scheduleID] = messageID
-	h.queueMu.Unlock()
+func (h *BotHandler) SetQueueService(service *queue.Service) {
+	h.queues = service
+}
+
+func (h *BotHandler) SetDefaultChatID(chatID int64) { h.defaultChatID = chatID }
+
+func (h *BotHandler) SerializeEdit(next bot.HandlerFunc) bot.HandlerFunc {
+	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		h.editActionMu.Lock()
+		defer h.editActionMu.Unlock()
+		if update.CallbackQuery != nil {
+			q := update.CallbackQuery
+			if q.Message.Message == nil || !h.ValidateEditSession(q.From.ID, q.Message.Message.Chat.ID, q.Message.Message.MessageThreadID, q.Message.Message.ID) || !h.validEditCallback(ctx, update) {
+				h.answer(ctx, b, q, "Кнопка устарела. Откройте меню заново")
+				return
+			}
+		}
+		next(ctx, b, update)
+	}
+}
+
+func (h *BotHandler) validEditCallback(ctx context.Context, update *models.Update) bool {
+	query := update.CallbackQuery
+	if query.Message.Message == nil {
+		return false
+	}
+	parts := strings.Split(query.Data, ":")
+	if len(parts) == 0 {
+		return false
+	}
+	h.stateMu.RLock()
+	session := h.userState[query.From.ID]
+	h.stateMu.RUnlock()
+	menu := "schedule"
+	if parts[0] == "EditConfig" || parts[0] == "ConfigBack" || parts[0] == "ConfigLeave" {
+		menu = "config"
+	}
+	if session.menu != menu {
+		return false
+	}
+	var index int
+	switch parts[0] {
+	case "AddNewSchedule", "LeaveEditSchedule", "SetCurrentWeek", "EditConfig", "ConfigBack", "ConfigLeave":
+		return true
+	case "Back":
+		if len(parts) == 2 && parts[1] == "mainmenu" {
+			return true
+		}
+		if len(parts) != 3 {
+			return false
+		}
+		index = 2
+	default:
+		if len(parts) < 2 {
+			return false
+		}
+		index = 1
+	}
+	id, err := strconv.Atoi(parts[index])
+	if err != nil || id <= 0 {
+		return false
+	}
+	if (parts[0] == "EditTypeOfWeek" || parts[0] == "EditDayOfWeek" || parts[0] == "ChWeekDay") && len(parts) != 3 {
+		return false
+	}
+	schedule, err := h.db.GetScheduleEntry(ctx, id)
+	if err != nil {
+		return false
+	}
+	return query.Message.Message.Chat.ID > 0 || schedule.ChatID == query.Message.Message.Chat.ID
+}
+
+func (h *BotHandler) expireSessions(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.isExpiredUserEditSes(h.settings.Values().TimeForExpiredEditSes)
+		}
+	}
 }

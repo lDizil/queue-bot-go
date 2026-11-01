@@ -2,13 +2,15 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"queuebot/db"
+	"queuebot/queue"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -32,7 +34,7 @@ func (h *BotHandler) SwapRequest(ctx context.Context, b *bot.Bot, update *models
 	requesterUserID := message.From.ID
 	requesterUsername := message.From.Username
 
-	scheduleID, targetPosition, err := h.resolveSwapCommand(ctx, message.Text, threadID)
+	scheduleID, targetPosition, err := h.resolveSwapCommand(ctx, message.Text, chatID, threadID)
 	if err != nil {
 		h.sendSwapInfoMessage(ctx, b, chatID, threadID, err.Error())
 		return
@@ -79,7 +81,15 @@ func (h *BotHandler) SwapRequest(ctx context.Context, b *bot.Bot, update *models
 		return
 	}
 
-	requestID := h.nextSwapRequestID()
+	requestID, err := h.nextSwapRequestID()
+	if schedule.QueueMesID == nil {
+		h.sendSwapInfoMessage(ctx, b, chatID, threadID, "Очередь уже закрыта")
+		return
+	}
+	if err != nil {
+		log.Printf("create swap ID: %v", err)
+		return
+	}
 	text := fmt.Sprintf(
 		"Запрос на обмен местами\n\nПользователь %s (место %d) хочет обменяться с %s (место %d).\n\n%s, подтвердите обмен.",
 		swapUserLabel(requesterEntry.Username),
@@ -98,7 +108,7 @@ func (h *BotHandler) SwapRequest(ctx context.Context, b *bot.Bot, update *models
 
 	sent, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:          chatID,
-		MessageThreadID: schedule.ThreadID,
+		MessageThreadID: threadID,
 		Text:            text,
 		ReplyMarkup:     markup,
 	})
@@ -113,14 +123,17 @@ func (h *BotHandler) SwapRequest(ctx context.Context, b *bot.Bot, update *models
 		ID:                requestID,
 		ScheduleID:        scheduleID,
 		ChatID:            chatID,
-		ThreadID:          schedule.ThreadID,
+		ThreadID:          threadID,
 		MessageID:         sent.ID,
 		RequesterUserID:   requesterEntry.UserID,
 		RequesterUsername: requesterEntry.Username,
 		RequesterPosition: requesterEntry.Position,
+		RequesterEntryID:  requesterEntry.ID,
 		TargetUserID:      targetEntry.UserID,
 		TargetUsername:    targetEntry.Username,
 		TargetPosition:    targetEntry.Position,
+		TargetEntryID:     targetEntry.ID,
+		QueueMessageID:    *schedule.QueueMesID,
 		ExpiresAt:         time.Now().Add(swapRequestTTL),
 	}
 	h.swapMu.Unlock()
@@ -129,7 +142,7 @@ func (h *BotHandler) SwapRequest(ctx context.Context, b *bot.Bot, update *models
 }
 
 func (h *BotHandler) SwapConfirm(ctx context.Context, b *bot.Bot, update *models.Update) {
-	if update == nil || update.CallbackQuery == nil {
+	if update == nil || update.CallbackQuery == nil || update.CallbackQuery.Message.Message == nil {
 		return
 	}
 
@@ -144,7 +157,7 @@ func (h *BotHandler) SwapConfirm(ctx context.Context, b *bot.Bot, update *models
 		return
 	}
 
-	req, ok, unauthorized := h.claimSwapRequest(requestID, query.From.ID)
+	req, ok, unauthorized := h.claimSwapRequest(requestID, query.From.ID, query.Message.Message.Chat.ID, query.Message.Message.ID)
 	if unauthorized != "" {
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: query.ID,
@@ -173,7 +186,7 @@ func (h *BotHandler) SwapConfirm(ctx context.Context, b *bot.Bot, update *models
 		resultText = "Очередь уже закрыта, обмен не выполнен"
 		callbackText = "Очередь закрыта"
 	} else {
-		err = h.db.SwapQueuePositions(ctx, req.ScheduleID, req.RequesterUserID, req.TargetUserID, req.RequesterPosition, req.TargetPosition)
+		err = h.queues.Swap(ctx, queue.Reference{ScheduleID: req.ScheduleID, ChatID: req.ChatID, MessageID: req.QueueMessageID}, req.RequesterEntryID, req.TargetEntryID, req.RequesterPosition, req.TargetPosition)
 		switch {
 		case err == nil:
 			resultText = fmt.Sprintf(
@@ -183,14 +196,10 @@ func (h *BotHandler) SwapConfirm(ctx context.Context, b *bot.Bot, update *models
 			)
 			callbackText = "Обмен подтвержден"
 
-			task := &updateTask{
-				ctx:        ctx,
-				b:          b,
-				chatID:     req.ChatID,
-				scheduleID: req.ScheduleID,
-			}
-			h.updateQueue <- *task
-		case errors.Is(err, db.ErrSwapStateChanged):
+		case errors.Is(err, queue.ErrClosed):
+			resultText = "Очередь уже закрыта, обмен не выполнен"
+			callbackText = "Очередь закрыта"
+		case errors.Is(err, queue.ErrStale), errors.Is(err, db.ErrSwapStateChanged):
 			resultText = "Кто-то изменил очередь раньше подтверждения. Обмен не выполнен, отправьте новый запрос"
 			callbackText = "Очередь уже изменилась"
 		default:
@@ -210,7 +219,7 @@ func (h *BotHandler) SwapConfirm(ctx context.Context, b *bot.Bot, update *models
 }
 
 func (h *BotHandler) SwapReject(ctx context.Context, b *bot.Bot, update *models.Update) {
-	if update == nil || update.CallbackQuery == nil {
+	if update == nil || update.CallbackQuery == nil || update.CallbackQuery.Message.Message == nil {
 		return
 	}
 
@@ -225,7 +234,7 @@ func (h *BotHandler) SwapReject(ctx context.Context, b *bot.Bot, update *models.
 		return
 	}
 
-	req, ok, unauthorized := h.claimSwapRequest(requestID, query.From.ID)
+	req, ok, unauthorized := h.claimSwapRequest(requestID, query.From.ID, query.Message.Message.Chat.ID, query.Message.Message.ID)
 	if unauthorized != "" {
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: query.ID,
@@ -254,7 +263,7 @@ func (h *BotHandler) SwapReject(ctx context.Context, b *bot.Bot, update *models.
 	})
 }
 
-func (h *BotHandler) resolveSwapCommand(ctx context.Context, rawText string, threadID int) (int, int, error) {
+func (h *BotHandler) resolveSwapCommand(ctx context.Context, rawText string, chatID int64, threadID int) (int, int, error) {
 	parts := strings.Fields(strings.TrimSpace(rawText))
 	if len(parts) != 2 {
 		return 0, 0, errors.New("Формат: /swap <место>")
@@ -273,15 +282,7 @@ func (h *BotHandler) resolveSwapCommand(ctx context.Context, rawText string, thr
 		return 0, 0, errors.New("Неверный формат места. Пример: /swap 5")
 	}
 
-	if targetPosition > h.totalSlotsInQueue {
-		return 0, 0, fmt.Errorf("Место %d вне диапазона очереди", targetPosition)
-	}
-
-	if threadID == 0 {
-		return 0, 0, errors.New("Команду /swap нужно писать в теме с очередью")
-	}
-
-	scheduleID, err := h.db.GetActiveScheduleIDByThread(ctx, threadID)
+	schedule, err := h.queues.ActiveTopic(ctx, chatID, threadID)
 	if err != nil {
 		switch {
 		case errors.Is(err, db.ErrActiveQueueNotFound):
@@ -291,8 +292,11 @@ func (h *BotHandler) resolveSwapCommand(ctx context.Context, rawText string, thr
 			return 0, 0, errors.New("Не удалось определить очередь по теме, попробуйте позже")
 		}
 	}
+	if targetPosition > schedule.ActiveCapacity {
+		return 0, 0, fmt.Errorf("Место %d вне диапазона очереди", targetPosition)
+	}
 
-	return scheduleID, targetPosition, nil
+	return schedule.ID, targetPosition, nil
 }
 
 func (h *BotHandler) parseSwapRequestID(data string) (string, error) {
@@ -304,13 +308,16 @@ func (h *BotHandler) parseSwapRequestID(data string) (string, error) {
 	return parts[1], nil
 }
 
-func (h *BotHandler) claimSwapRequest(requestID string, actorUserID int64) (swapRequest, bool, string) {
+func (h *BotHandler) claimSwapRequest(requestID string, actorUserID, chatID int64, messageID int) (swapRequest, bool, string) {
 	h.swapMu.Lock()
 	defer h.swapMu.Unlock()
 
 	req, ok := h.pendingSwaps[requestID]
 	if !ok {
 		return swapRequest{}, false, ""
+	}
+	if req.ChatID != chatID || req.MessageID != messageID {
+		return swapRequest{}, false, "Запрос обмена устарел"
 	}
 
 	if req.TargetUserID != actorUserID {
@@ -321,9 +328,12 @@ func (h *BotHandler) claimSwapRequest(requestID string, actorUserID int64) (swap
 	return req, true, ""
 }
 
-func (h *BotHandler) nextSwapRequestID() string {
-	seq := atomic.AddUint64(&h.swapSeq, 1)
-	return strconv.FormatUint(seq, 10)
+func (h *BotHandler) nextSwapRequestID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value[:]), nil
 }
 
 func (h *BotHandler) expireSwapRequest(requestID string) {

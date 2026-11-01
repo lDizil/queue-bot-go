@@ -1,0 +1,10 @@
+total_slots_in_queue: 30
+amount_of_buttons_in_row: 5
+delay_update_queue: 400ms
+edit_session_timeout: 4m
+week1_date: "2026-04-10"
+week1_type: odd
+scheduler_tick_interval: 1s
+one_shot_delay: 6m
+one_shot_duration: 90m
+update_workers: 4

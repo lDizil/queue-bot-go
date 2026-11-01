@@ -1,0 +1,12 @@
+.git
+.github
+.env
+.env.*
+.idea
+.vscode
+.DS_Store
+*.test
+*.out
+coverage.*
+queue_bot
+nul

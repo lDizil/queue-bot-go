@@ -17,7 +17,7 @@ func (h *BotHandler) ChangeWeekType(ctx context.Context, b *bot.Bot, update *mod
 	h.editMu.RLock()
 	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-	
+
 	dataSl := strings.Split(data, ":")
 
 	scheduleID, err := strconv.Atoi(dataSl[1])
@@ -28,6 +28,10 @@ func (h *BotHandler) ChangeWeekType(ctx context.Context, b *bot.Bot, update *mod
 	}
 
 	curWeekType := dataSl[2]
+	if u.SwitchWeekType[curWeekType] == "" {
+		h.answer(ctx, b, query, "Некорректный тип недели")
+		return
+	}
 
 	err = h.db.ChangeWeekType(ctx, scheduleID, u.SwitchWeekType[curWeekType])
 	if err != nil {
@@ -36,13 +40,13 @@ func (h *BotHandler) ChangeWeekType(ctx context.Context, b *bot.Bot, update *mod
 		return
 	}
 
-	err = h.reschedule(ctx, scheduleID) 
+	err = h.reschedule(ctx, scheduleID)
 	if err != nil {
 		msg := fmt.Sprintf("Ошибка во время перепланирования записи (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
-	
+
 	err = h.ReturnToEditSchMenu(ctx, b, scheduleID, username, query, chatID, editMesID)
 	if err != nil {
 		return
@@ -66,6 +70,10 @@ func (h *BotHandler) ChangeWeekDay(ctx context.Context, b *bot.Bot, update *mode
 	}
 
 	weekDay := params[2]
+	if _, ok := dayEnToRu[weekDay]; !ok {
+		h.answer(ctx, b, query, "Некорректный день недели")
+		return
+	}
 
 	err = h.db.ChangeWeekDay(ctx, scheduleID, weekDay)
 	if err != nil {
@@ -73,8 +81,8 @@ func (h *BotHandler) ChangeWeekDay(ctx context.Context, b *bot.Bot, update *mode
 		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
-	
-	err = h.reschedule(ctx, scheduleID) 
+
+	err = h.reschedule(ctx, scheduleID)
 	if err != nil {
 		msg := fmt.Sprintf("Ошибка во время перепланирования записи (пользователь %s). %v", username, err)
 		h.handleError(ctx, b, query.ID, msg)
@@ -93,7 +101,7 @@ func (h *BotHandler) EditTimeMenu(ctx context.Context, b *bot.Bot, update *model
 	h.editMu.RLock()
 	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
-	
+
 	dataSl := strings.Split(data, ":")
 
 	scheduleID, err := strconv.Atoi(dataSl[1])

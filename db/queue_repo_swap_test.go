@@ -91,7 +91,7 @@ func TestGetActiveScheduleIDByThread(t *testing.T) {
 	}
 }
 
-func TestGetActiveScheduleIDByThread_PicksLatestQueueMessage(t *testing.T) {
+func TestGetActiveScheduleIDByThread_RejectsAmbiguousTopic(t *testing.T) {
 	repo := newTestDBRepo(t)
 	ctx := context.Background()
 
@@ -109,13 +109,9 @@ func TestGetActiveScheduleIDByThread_PicksLatestQueueMessage(t *testing.T) {
 		t.Fatalf("SetQueueMessageID second: %v", err)
 	}
 
-	got, err := repo.GetActiveScheduleIDByThread(ctx, threadID)
-	if err != nil {
-		t.Fatalf("GetActiveScheduleIDByThread: %v", err)
-	}
-
-	if got != scheduleID2 {
-		t.Fatalf("expected latest schedule id %d, got %d", scheduleID2, got)
+	_, err = repo.GetActiveScheduleIDByThread(ctx, threadID)
+	if !errors.Is(err, ErrMultipleActiveQueuesInThread) {
+		t.Fatalf("expected ambiguity, got %v", err)
 	}
 }
 
