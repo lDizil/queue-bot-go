@@ -1,0 +1,55 @@
+name: Rotate Telegram token
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rotate:
+    name: Rotate token on the existing deployment
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    concurrency:
+      group: queuebot-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify main and token format
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          ROTATE_BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: |
+          set +x
+          set -eu
+          if [ "$(git rev-parse HEAD)" != "$EXPECTED_SHA" ]; then
+            echo "Main changed since this action was requested; run it again."
+            exit 1
+          fi
+          python3 .github/workflows/scripts/rotate_token.py validate
+      - name: Update token and recreate the existing bot
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          ROTATE_BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        with:
+          host: ${{ secrets.GO_BOT_SERVER_HOST }}
+          username: ${{ secrets.GO_BOT_SERVER_USER }}
+          key: ${{ secrets.GO_BOT_SSH_PRIVATE_KEY }}
+          envs: EXPECTED_SHA,ROTATE_BOT_TOKEN
+          debug: false
+          command_timeout: 6m
+          script: |
+            set +x
+            set -eu
+            cd ~/queue-bot-go
+            if [ "$(git rev-parse HEAD)" != "$EXPECTED_SHA" ]; then
+              echo "Finish the selected main deployment before rotating its token."
+              exit 1
+            fi
+            python3 .github/workflows/scripts/rotate_token.py rotate

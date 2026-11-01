@@ -26,7 +26,6 @@ func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *mode
 	builder.WriteString(text)
 
 	keyboard := [][]models.InlineKeyboardButton{}
-	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "📅 Сменить на " + weekTypeEnToRu[u.SwitchWeekType[curWeekType]], CallbackData: fmt.Sprintf("SetCurrentWeek:%s:%s", configWeekMonday(time.Now()).Format("2006-01-02"), u.SwitchWeekType[curWeekType])}})
 
 	if len(schedules) == 0 {
 		builder.WriteString("\nНет записей для редактирования")
@@ -61,6 +60,8 @@ func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *mode
 	}
 
 	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
+
+	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Сменить тип недели", CallbackData: fmt.Sprintf("SetCurrentWeek:%s:%s", configWeekMonday(time.Now()).Format("2006-01-02"), u.SwitchWeekType[curWeekType])}})
 
 	btn = models.InlineKeyboardButton{
 		Text:         "Закончить редактирование",

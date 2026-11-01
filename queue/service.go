@@ -80,7 +80,15 @@ type Reference struct {
 
 type queueState struct {
 	mu           sync.Mutex
+	render       chan struct{}
 	pending      bool
+	inflight     bool
+	dirty        bool
+	readyAt      time.Time
+	closing      bool
+	deleting     bool
+	publish      bool
+	chatID       int64
 	uncertain    bool
 	seen         map[string]time.Time
 	publication  *publication
@@ -110,12 +118,13 @@ type Service struct {
 	jobs      chan int
 	wg        sync.WaitGroup
 	now       func() time.Time
+	cooldowns map[int64]cooldown
 }
 
 func NewService(ctx context.Context, store Store, cfg *settings.Manager, messenger Messenger) *Service {
 	ctx, cancel := context.WithCancel(ctx)
 	s := &Service{store: store, settings: cfg, messenger: messenger, ctx: ctx, cancel: cancel,
-		states: make(map[int]*queueState), jobs: make(chan int, 128), now: time.Now}
+		states: make(map[int]*queueState), jobs: make(chan int, 128), now: time.Now, cooldowns: make(map[int64]cooldown)}
 	for range cfg.Values().UpdateWorkers {
 		s.wg.Add(1)
 		go s.worker()
@@ -133,78 +142,121 @@ func (s *Service) state(id int) *queueState {
 	defer s.mu.Unlock()
 	state := s.states[id]
 	if state == nil {
-		state = &queueState{seen: make(map[string]time.Time), cleanup: make(map[int]messageCleanup)}
+		state = &queueState{render: make(chan struct{}, 1), seen: make(map[string]time.Time), cleanup: make(map[int]messageCleanup)}
 		s.states[id] = state
 	}
 	return state
 }
 
-func (s *Service) Prepare(ctx context.Context, id int, opensAt, closesAt time.Time) error {
+func (s *Service) Prepare(ctx context.Context, id int, opensAt, closesAt time.Time) (result error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	state := s.state(id)
+	if err := s.startHTTP(ctx, state, false); err != nil {
+		return err
+	}
+	defer func() { s.finishHTTP(state, id, result, false) }()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.uncertain {
-		if _, err := s.readSchedule(ctx, id, state); err != nil {
-			return err
-		}
+	if state.closing || state.deleting {
+		return db.ErrQueueStateChanged
+	}
+	before, err := s.readSchedule(ctx, id, state)
+	if err != nil {
+		return err
 	}
 	values := s.settings.Values()
-	_, err := s.store.BeginQueueRun(ctx, id, opensAt, closesAt, values.TotalSlotsInQueue, values.AmountOfButtonsInRow)
+	_, err = s.store.BeginQueueRun(ctx, id, opensAt, closesAt, values.TotalSlotsInQueue, values.AmountOfButtonsInRow)
 	if err != nil {
 		state.uncertain = true
+		return err
 	}
-	return err
+	if before.ActiveOpensAt == nil {
+		state.publish = false
+	}
+	return nil
 }
 
-func (s *Service) Refresh(ctx context.Context, id int) error {
+func (s *Service) Refresh(ctx context.Context, id int) (result error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	state := s.state(id)
+	if err := s.startHTTP(ctx, state, true); err != nil {
+		return err
+	}
+	defer func() { s.finishHTTP(state, id, result, true) }()
 	state.mu.Lock()
-	defer state.mu.Unlock()
+	state.publish = true
+	state.mu.Unlock()
 	return s.refresh(ctx, id, state)
 }
 
 func (s *Service) refresh(ctx context.Context, id int, state *queueState) error {
+	state.mu.Lock()
+	if state.closing {
+		state.mu.Unlock()
+		return s.close(ctx, id, state)
+	}
 	schedule, err := s.readSchedule(ctx, id, state)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		state.mu.Unlock()
 		return err
 	}
 	s.resolveWrites(state, schedule, errors.Is(err, pgx.ErrNoRows))
+	state.mu.Unlock()
 	if err != nil {
-		if cleanupErr := s.cleanupMessages(ctx, state, schedule); cleanupErr != nil {
+		if cleanupErr := s.cleanupMessages(ctx, id, state); cleanupErr != nil {
 			return cleanupErr
 		}
 		return err
 	}
 	refreshErr := s.refreshCurrent(ctx, schedule, state)
-	if len(state.cleanup) == 0 {
-		return refreshErr
-	}
-	current, readErr := s.readSchedule(ctx, id, state)
-	if readErr != nil && !errors.Is(readErr, pgx.ErrNoRows) {
-		return errors.Join(refreshErr, readErr)
-	}
-	cleanupErr := s.cleanupMessages(ctx, state, current)
+	cleanupErr := s.cleanupMessages(ctx, id, state)
 	return errors.Join(refreshErr, cleanupErr)
 }
 
 func (s *Service) refreshCurrent(ctx context.Context, schedule db.Schedule, state *queueState) error {
+	state.mu.Lock()
+	current, err := s.readSchedule(ctx, schedule.ID, state)
+	if err != nil {
+		state.mu.Unlock()
+		return err
+	}
+	schedule = current
 	if schedule.ActiveOpensAt == nil || schedule.ActiveClosesAt == nil || !s.now().Before(*schedule.ActiveClosesAt) {
+		state.mu.Unlock()
+		return nil
+	}
+	if state.closing || (schedule.QueueMesID == nil && !state.publish) {
+		state.mu.Unlock()
 		return nil
 	}
 	snapshot, err := s.snapshot(ctx, schedule)
+	if err == nil {
+		state.dirty = false
+	}
+	state.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	if schedule.QueueMesID != nil {
-		if err := s.messenger.EditQueue(ctx, snapshot, *schedule.QueueMesID); !errors.Is(err, ErrMessageMissing) {
+		err := s.callHTTP(ctx, schedule.ChatID, func() error { return s.messenger.EditQueue(ctx, snapshot, *schedule.QueueMesID) })
+		if !errors.Is(err, ErrMessageMissing) {
 			return err
 		}
 	}
-	messageID, err := s.messenger.SendQueue(ctx, snapshot)
+	state.mu.Lock()
+	closing := state.closing
+	state.mu.Unlock()
+	if closing {
+		return nil
+	}
+	var messageID int
+	err = s.callHTTP(ctx, schedule.ChatID, func() error {
+		var sendErr error
+		messageID, sendErr = s.messenger.SendQueue(ctx, snapshot)
+		return sendErr
+	})
 	if err != nil {
 		return err
 	}
@@ -212,8 +264,11 @@ func (s *Service) refreshCurrent(ctx context.Context, schedule db.Schedule, stat
 }
 
 func (s *Service) persistPublication(ctx context.Context, state *queueState, published publication) error {
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	err := s.store.SetQueueMessageID(ctx, published.snapshot.Schedule.ID, published.messageID)
 	if err == nil {
+		state.publish = false
 		if published.previousMessageID != 0 {
 			state.cleanup[published.previousMessageID] = messageCleanup{chatID: published.snapshot.Schedule.ChatID}
 		}
@@ -227,12 +282,18 @@ func (s *Service) persistPublication(ctx context.Context, state *queueState, pub
 }
 
 func (s *Service) readSchedule(ctx context.Context, id int, state *queueState) (db.Schedule, error) {
-	if !state.uncertain {
-		return s.store.GetScheduleEntry(ctx, id)
+	var schedule db.Schedule
+	var err error
+	if state.uncertain {
+		schedule, err = s.store.SyncQueueState(ctx, id)
+		if err == nil || errors.Is(err, pgx.ErrNoRows) {
+			state.uncertain = false
+		}
+	} else {
+		schedule, err = s.store.GetScheduleEntry(ctx, id)
 	}
-	schedule, err := s.store.SyncQueueState(ctx, id)
-	if err == nil || errors.Is(err, pgx.ErrNoRows) {
-		state.uncertain = false
+	if err == nil {
+		state.chatID = schedule.ChatID
 	}
 	return schedule, err
 }
@@ -247,6 +308,7 @@ func (s *Service) reconcileWrites(ctx context.Context, state *queueState, id int
 func (s *Service) resolveWrites(state *queueState, schedule db.Schedule, missing bool) {
 	if published := state.publication; published != nil {
 		if !missing && schedule.QueueMesID != nil && *schedule.QueueMesID == published.messageID {
+			state.publish = false
 			if published.previousMessageID != 0 {
 				state.cleanup[published.previousMessageID] = messageCleanup{chatID: published.snapshot.Schedule.ChatID}
 			}
@@ -272,21 +334,44 @@ func sameRun(schedule db.Schedule, opensAt, closesAt *time.Time) bool {
 		schedule.ActiveOpensAt.Equal(*opensAt) && schedule.ActiveClosesAt.Equal(*closesAt)
 }
 
-func (s *Service) cleanupMessages(ctx context.Context, state *queueState, current db.Schedule) error {
-	var errs []error
+func (s *Service) cleanupMessages(ctx context.Context, id int, state *queueState) error {
+	state.mu.Lock()
+	if len(state.cleanup) == 0 {
+		state.mu.Unlock()
+		return nil
+	}
+	current, readErr := s.readSchedule(ctx, id, state)
+	if readErr != nil && !errors.Is(readErr, pgx.ErrNoRows) {
+		state.mu.Unlock()
+		return readErr
+	}
+	cleanups := make(map[int]messageCleanup, len(state.cleanup))
 	for messageID, cleanup := range state.cleanup {
 		if current.QueueMesID != nil && *current.QueueMesID == messageID {
 			delete(state.cleanup, messageID)
 			continue
 		}
-		var err error
+		cleanups[messageID] = cleanup
+	}
+	state.mu.Unlock()
+	var errs []error
+	for messageID, cleanup := range cleanups {
+		chatID := cleanup.chatID
 		if cleanup.snapshot != nil {
-			err = s.messenger.EditQueue(ctx, *cleanup.snapshot, messageID)
-		} else {
-			err = s.messenger.RetireQueue(ctx, cleanup.chatID, messageID)
+			chatID = cleanup.snapshot.Schedule.ChatID
 		}
+		err := s.callHTTP(ctx, chatID, func() error {
+			if cleanup.snapshot != nil {
+				return s.messenger.EditQueue(ctx, *cleanup.snapshot, messageID)
+			}
+			return s.messenger.RetireQueue(ctx, cleanup.chatID, messageID)
+		})
 		if err == nil || errors.Is(err, ErrMessageMissing) {
-			delete(state.cleanup, messageID)
+			state.mu.Lock()
+			if state.cleanup[messageID] == cleanup {
+				delete(state.cleanup, messageID)
+			}
+			state.mu.Unlock()
 			continue
 		}
 		errs = append(errs, err)
@@ -309,47 +394,86 @@ func (s *Service) snapshot(ctx context.Context, schedule db.Schedule) (Snapshot,
 	return Snapshot{Schedule: schedule, Entries: entries, Status: status}, nil
 }
 
-func (s *Service) Close(ctx context.Context, id int) error {
+func (s *Service) Close(ctx context.Context, id int) (result error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	state := s.state(id)
 	state.mu.Lock()
-	defer state.mu.Unlock()
+	state.closing = true
+	state.mu.Unlock()
+	if err := s.startHTTP(ctx, state, true); err != nil {
+		state.mu.Lock()
+		s.scheduleUpdate(state, id, 2*time.Second)
+		state.mu.Unlock()
+		return err
+	}
+	defer func() { s.finishHTTP(state, id, result, true) }()
 	return s.close(ctx, id, state)
 }
 
-func (s *Service) Delete(ctx context.Context, id int) error {
+func (s *Service) Delete(ctx context.Context, id int) (result error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	state := s.state(id)
 	state.mu.Lock()
-	defer state.mu.Unlock()
+	state.deleting = true
+	state.closing = true
+	state.mu.Unlock()
+	if err := s.startHTTP(ctx, state, true); err != nil {
+		state.mu.Lock()
+		state.deleting = false
+		s.scheduleUpdate(state, id, 2*time.Second)
+		state.mu.Unlock()
+		return err
+	}
+	defer func() {
+		state.mu.Lock()
+		state.deleting = false
+		state.mu.Unlock()
+		s.finishHTTP(state, id, result, true)
+	}()
 	if err := s.close(ctx, id, state); err != nil {
 		return err
 	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	return s.store.DeleteScheduleEntry(ctx, id)
 }
 
 func (s *Service) close(ctx context.Context, id int, state *queueState) error {
+	state.mu.Lock()
 	schedule, err := s.readSchedule(ctx, id, state)
 	if errors.Is(err, pgx.ErrNoRows) {
+		state.closing = false
+		state.mu.Unlock()
 		return nil
 	}
 	if err != nil {
+		state.mu.Unlock()
 		return err
 	}
 	s.resolveWrites(state, schedule, false)
+	var snapshot Snapshot
 	if schedule.QueueMesID != nil {
-		snapshot, err := s.snapshot(ctx, schedule)
+		snapshot, err = s.snapshot(ctx, schedule)
 		if err != nil {
+			state.mu.Unlock()
 			return err
 		}
 		snapshot.Status = u.QueueClosed
-		if err := s.messenger.EditQueue(ctx, snapshot, *schedule.QueueMesID); err != nil {
+	}
+	state.mu.Unlock()
+	if schedule.QueueMesID != nil {
+		if err := s.callHTTP(ctx, schedule.ChatID, func() error { return s.messenger.EditQueue(ctx, snapshot, *schedule.QueueMesID) }); err != nil {
 			if !errors.Is(err, ErrMessageMissing) {
 				return err
 			}
-			messageID, sendErr := s.messenger.SendQueue(ctx, snapshot)
+			var messageID int
+			sendErr := s.callHTTP(ctx, schedule.ChatID, func() error {
+				var sendErr error
+				messageID, sendErr = s.messenger.SendQueue(ctx, snapshot)
+				return sendErr
+			})
 			if sendErr != nil {
 				return sendErr
 			}
@@ -358,71 +482,100 @@ func (s *Service) close(ctx context.Context, id int, state *queueState) error {
 			}
 		}
 	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	if err := s.store.FinishQueueRun(ctx, id); err != nil {
 		state.uncertain = true
 		s.scheduleUpdate(state, id, 2*time.Second)
 		return err
 	}
+	state.closing = false
+	state.publish = false
 	clear(state.seen)
 	return nil
 }
 
-func (s *Service) Notify(ctx context.Context, schedule db.Schedule, text string) error {
+func (s *Service) Notify(ctx context.Context, schedule db.Schedule, text string) (result error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return s.messenger.NotifyQueue(ctx, schedule, text)
+	state := s.state(schedule.ID)
+	if err := s.startHTTP(ctx, state, false); err != nil {
+		return err
+	}
+	defer func() { s.finishHTTP(state, schedule.ID, result, false) }()
+	state.mu.Lock()
+	state.chatID = schedule.ChatID
+	state.mu.Unlock()
+	return s.callHTTP(ctx, schedule.ChatID, func() error { return s.messenger.NotifyQueue(ctx, schedule, text) })
 }
 
-func (s *Service) CancelPending(ctx context.Context, id int, expectedOpensAt, expectedClosesAt time.Time) error {
+func (s *Service) CancelPending(ctx context.Context, id int, expectedOpensAt, expectedClosesAt time.Time) (result error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	state := s.state(id)
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	schedule, err := s.readSchedule(ctx, id, state)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+	if err := s.startHTTP(ctx, state, false); err != nil {
+		return err
 	}
+	defer func() { s.finishHTTP(state, id, result, true) }()
+	err := func() error {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		schedule, err := s.readSchedule(ctx, id, state)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		s.resolveWrites(state, schedule, false)
+		if state.closing || schedule.IsTemporary || schedule.ActiveOpensAt == nil || !s.now().Before(*schedule.ActiveOpensAt) {
+			return nil
+		}
+		if !sameRun(schedule, &expectedOpensAt, &expectedClosesAt) {
+			return db.ErrQueueStateChanged
+		}
+		closed, err := s.snapshot(ctx, schedule)
+		if err != nil {
+			return err
+		}
+		closed.Status = u.QueueClosed
+		state.cancellation = &closed
+		if err := s.store.FinishQueueRun(ctx, id); err != nil {
+			state.uncertain = true
+			s.reconcileWrites(ctx, state, id)
+			s.scheduleUpdate(state, id, 2*time.Second)
+			return err
+		}
+		state.publish = false
+		clear(state.seen)
+		cleared := schedule
+		cleared.ActiveOpensAt, cleared.ActiveClosesAt, cleared.QueueMesID = nil, nil, nil
+		s.resolveWrites(state, cleared, false)
+		return nil
+	}()
 	if err != nil {
 		return err
 	}
-	s.resolveWrites(state, schedule, false)
-	if schedule.IsTemporary || schedule.ActiveOpensAt == nil || !s.now().Before(*schedule.ActiveOpensAt) {
-		return nil
-	}
-	if !sameRun(schedule, &expectedOpensAt, &expectedClosesAt) {
-		return db.ErrQueueStateChanged
-	}
-	closed, err := s.snapshot(ctx, schedule)
-	if err != nil {
-		return err
-	}
-	closed.Status = u.QueueClosed
-	state.cancellation = &closed
-	if err := s.store.FinishQueueRun(ctx, id); err != nil {
-		state.uncertain = true
-		s.reconcileWrites(ctx, state, id)
-		s.scheduleUpdate(state, id, 2*time.Second)
-		return err
-	}
-	clear(state.seen)
-	cleared := schedule
-	cleared.ActiveOpensAt, cleared.ActiveClosesAt, cleared.QueueMesID = nil, nil, nil
-	s.resolveWrites(state, cleared, false)
-	if err := s.cleanupMessages(ctx, state, cleared); err != nil {
+	if err := s.cleanupMessages(ctx, id, state); err != nil {
 		log.Printf("[queue] close canceled preview: schedule=%d: %v", id, err)
-		s.scheduleUpdate(state, id, 2*time.Second)
+		state.mu.Lock()
+		s.scheduleRetry(state, id, 2*time.Second)
+		state.mu.Unlock()
 	}
 	return nil
 }
 
-func (s *Service) LegacyMessageDate(ctx context.Context, id int) (time.Time, error) {
+func (s *Service) LegacyMessageDate(ctx context.Context, id int) (date time.Time, result error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	state := s.state(id)
+	if err := s.startHTTP(ctx, state, false); err != nil {
+		return time.Time{}, err
+	}
+	defer func() { s.finishHTTP(state, id, result, false) }()
 	state.mu.Lock()
-	defer state.mu.Unlock()
 	schedule, err := s.readSchedule(ctx, id, state)
+	state.mu.Unlock()
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -433,7 +586,11 @@ func (s *Service) LegacyMessageDate(ctx context.Context, id int) (time.Time, err
 	if !ok {
 		return time.Time{}, ErrLegacyDateUnavailable
 	}
-	date, err := messenger.QueueMessageDate(ctx, schedule, *schedule.QueueMesID)
+	err = s.callHTTP(ctx, schedule.ChatID, func() error {
+		var dateErr error
+		date, dateErr = messenger.QueueMessageDate(ctx, schedule, *schedule.QueueMesID)
+		return dateErr
+	})
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -466,6 +623,9 @@ func (s *Service) Active(ctx context.Context, ref Reference) (db.Schedule, error
 }
 
 func (s *Service) active(ctx context.Context, ref Reference, state *queueState) (db.Schedule, error) {
+	if state.closing || state.deleting {
+		return db.Schedule{}, ErrClosed
+	}
 	schedule, err := s.readSchedule(ctx, ref.ScheduleID, state)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return db.Schedule{}, ErrClosed
@@ -634,32 +794,45 @@ func (s *Service) Swap(ctx context.Context, ref Reference, requesterID, targetID
 	return nil
 }
 
-func (s *Service) Repost(ctx context.Context, ref Reference) error {
+func (s *Service) Repost(ctx context.Context, ref Reference) (result error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	state := s.state(ref.ScheduleID)
+	if err := s.startHTTP(ctx, state, true); err != nil {
+		return err
+	}
+	defer func() { s.finishHTTP(state, ref.ScheduleID, result, true) }()
 	state.mu.Lock()
-	defer state.mu.Unlock()
 	schedule, err := s.active(ctx, ref, state)
 	if err != nil {
+		state.mu.Unlock()
 		return err
 	}
 	s.resolveWrites(state, schedule, false)
 	snapshot, err := s.snapshot(ctx, schedule)
+	if err == nil {
+		state.dirty = false
+	}
+	state.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	messageID, err := s.messenger.SendQueue(ctx, snapshot)
+	var messageID int
+	err = s.callHTTP(ctx, schedule.ChatID, func() error {
+		var sendErr error
+		messageID, sendErr = s.messenger.SendQueue(ctx, snapshot)
+		return sendErr
+	})
 	if err != nil {
 		return err
 	}
 	if err := s.persistPublication(ctx, state, publication{snapshot: snapshot, messageID: messageID, previousMessageID: ref.MessageID}); err != nil {
 		return err
 	}
-	current := schedule
-	current.QueueMesID = &messageID
-	if err := s.cleanupMessages(ctx, state, current); err != nil {
+	if err := s.cleanupMessages(ctx, schedule.ID, state); err != nil {
+		state.mu.Lock()
 		s.scheduleUpdate(state, schedule.ID, 2*time.Second)
+		state.mu.Unlock()
 		return err
 	}
 	return nil
@@ -673,9 +846,14 @@ func (s *Service) Changed(id int) {
 }
 
 func (s *Service) scheduleUpdate(state *queueState, id int, delay time.Duration) {
-	if state.pending || s.ctx.Err() != nil {
+	if !state.dirty {
+		state.readyAt = s.now().Add(delay)
+	}
+	state.dirty = true
+	if state.pending || state.inflight || s.ctx.Err() != nil {
 		return
 	}
+	delay = max(0, state.readyAt.Sub(s.now()), s.cooldownRemaining(state.chatID))
 	state.pending = true
 	time.AfterFunc(delay, func() {
 		select {
@@ -695,14 +873,31 @@ func (s *Service) worker() {
 			state := s.state(id)
 			state.mu.Lock()
 			state.pending = false
+			if state.inflight || !state.dirty {
+				state.mu.Unlock()
+				continue
+			}
+			if remaining := max(state.readyAt.Sub(s.now()), s.cooldownRemaining(state.chatID)); remaining > 0 {
+				s.scheduleUpdate(state, id, remaining)
+				state.mu.Unlock()
+				continue
+			}
+			select {
+			case state.render <- struct{}{}:
+			default:
+				state.mu.Unlock()
+				continue
+			}
+			state.inflight = true
+			state.dirty = false
+			state.mu.Unlock()
 			ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 			err := s.refresh(ctx, id, state)
 			cancel()
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) && s.ctx.Err() == nil {
 				log.Printf("[queue] refresh schedule=%d: %v", id, err)
-				s.scheduleUpdate(state, id, 2*time.Second)
 			}
-			state.mu.Unlock()
+			s.finishHTTP(state, id, err, true)
 		}
 	}
 }

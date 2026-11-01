@@ -262,7 +262,7 @@ func (s *Scheduler) run(ctx context.Context, scheduleID int, worker *scheduleWor
 			initialRead = true
 			failures++
 			s.logFailure(scheduleID, err)
-			if !s.wait(ctx, retryDelay(failures)) {
+			if !s.wait(ctx, retryDelay(failures, err)) {
 				return
 			}
 			continue
@@ -278,7 +278,7 @@ func (s *Scheduler) run(ctx context.Context, scheduleID int, worker *scheduleWor
 				initialRead = true
 				failures++
 				s.logFailure(scheduleID, err)
-				if !s.wait(ctx, retryDelay(failures)) {
+				if !s.wait(ctx, retryDelay(failures, err)) {
 					return
 				}
 				continue
@@ -313,7 +313,7 @@ func (s *Scheduler) run(ctx context.Context, scheduleID int, worker *scheduleWor
 				s.setActive(scheduleID, worker, false)
 				failures++
 				s.logFailure(scheduleID, err)
-				if !s.wait(ctx, retryDelay(failures)) {
+				if !s.wait(ctx, retryDelay(failures, err)) {
 					return
 				}
 				continue
@@ -332,7 +332,7 @@ func (s *Scheduler) run(ctx context.Context, scheduleID int, worker *scheduleWor
 			initialRead = true
 			failures++
 			s.logFailure(scheduleID, err)
-			if !s.wait(ctx, retryDelay(failures)) {
+			if !s.wait(ctx, retryDelay(failures, err)) {
 				return
 			}
 			continue
@@ -482,8 +482,13 @@ func (s *Scheduler) wait(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
-func retryDelay(failures int) time.Duration {
-	return time.Second * time.Duration(1<<min(max(failures-1, 0), 5))
+func retryDelay(failures int, err error) time.Duration {
+	delay := time.Second * time.Duration(1<<min(max(failures-1, 0), 5))
+	var limited interface{ RetryAfter() time.Duration }
+	if errors.As(err, &limited) {
+		return max(delay, limited.RetryAfter())
+	}
+	return delay
 }
 
 func (s *Scheduler) logFailure(id int, err error) {
