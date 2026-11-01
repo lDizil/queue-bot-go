@@ -135,7 +135,7 @@ func (h *BotHandler) renderQueue(snapshot queue.Snapshot) (string, *models.Inlin
 	}
 	keyboard = append(keyboard,
 		[]models.InlineKeyboardButton{{Text: "Занять ближайшее свободное место", CallbackData: fmt.Sprintf("JoinFirstFreeslot:%d", schedule.ID)}},
-		[]models.InlineKeyboardButton{{Text: "✅ Сдал / отменить", CallbackData: fmt.Sprintf("CompleteSelf:%d", schedule.ID)}, {Text: "Выйти из очереди", CallbackData: fmt.Sprintf("LeaveFromQueue:%d", schedule.ID)}},
+		[]models.InlineKeyboardButton{{Text: "Сдал", CallbackData: fmt.Sprintf("CompleteSelf:%d", schedule.ID)}, {Text: "Выйти из очереди", CallbackData: fmt.Sprintf("LeaveFromQueue:%d", schedule.ID)}},
 		[]models.InlineKeyboardButton{{Text: "Отправить очередь повторно", CallbackData: fmt.Sprintf("SendQueueAgain:%d", schedule.ID)}})
 	switch snapshot.Status {
 	case u.QueueOpen:
@@ -184,7 +184,7 @@ func (h *BotHandler) SendQueue(ctx context.Context, snapshot queue.Snapshot) (in
 	}
 	message, err := h.b.SendMessage(ctx, &bot.SendMessageParams{ChatID: snapshot.Schedule.ChatID, MessageThreadID: threadID, Text: text, ReplyMarkup: markup})
 	if err != nil {
-		return 0, err
+		return 0, queueDeliveryError(err)
 	}
 	return message.ID, nil
 }
@@ -192,13 +192,13 @@ func (h *BotHandler) SendQueue(ctx context.Context, snapshot queue.Snapshot) (in
 func (h *BotHandler) EditQueue(ctx context.Context, snapshot queue.Snapshot, messageID int) error {
 	text, markup := h.renderQueue(snapshot)
 	_, err := h.b.EditMessageText(ctx, &bot.EditMessageTextParams{ChatID: snapshot.Schedule.ChatID, MessageID: messageID, Text: text, ReplyMarkup: markup})
-	if err != nil && strings.Contains(err.Error(), "message is not modified") {
+	if errors.Is(err, bot.ErrorBadRequest) && strings.Contains(err.Error(), "message is not modified") {
 		return nil
 	}
 	if errors.Is(err, bot.ErrorBadRequest) && strings.Contains(err.Error(), "message to edit not found") {
 		return queue.ErrMessageMissing
 	}
-	return err
+	return queueDeliveryError(err)
 }
 
 func (h *BotHandler) RecoverQueue(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -218,7 +218,7 @@ func (h *BotHandler) RetireQueue(ctx context.Context, chatID int64, messageID in
 	if errors.Is(err, bot.ErrorBadRequest) && strings.Contains(err.Error(), "message to edit not found") {
 		return queue.ErrMessageMissing
 	}
-	return err
+	return queueDeliveryError(err)
 }
 
 func (h *BotHandler) QueueMessageDate(ctx context.Context, schedule db.Schedule, messageID int) (time.Time, error) {
@@ -229,7 +229,7 @@ func (h *BotHandler) QueueMessageDate(ctx context.Context, schedule db.Schedule,
 		message, err = h.b.EditMessageReplyMarkup(ctx, &bot.EditMessageReplyMarkupParams{ChatID: schedule.ChatID, MessageID: messageID, ReplyMarkup: markup})
 	}
 	if err != nil {
-		return time.Time{}, fmt.Errorf("read original queue message date: %w", err)
+		return time.Time{}, fmt.Errorf("read original queue message date: %w", queueDeliveryError(err))
 	}
 	if message == nil || message.Date <= 0 || message.ID != messageID || message.Chat.ID != schedule.ChatID {
 		return time.Time{}, queue.ErrLegacyDateUnavailable
@@ -243,7 +243,7 @@ func (h *BotHandler) NotifyQueue(ctx context.Context, schedule db.Schedule, text
 		threadID = *schedule.ActiveThreadID
 	}
 	_, err := h.b.SendMessage(ctx, &bot.SendMessageParams{ChatID: schedule.ChatID, MessageThreadID: threadID, Text: text})
-	return err
+	return queueDeliveryError(err)
 }
 
 func (h *BotHandler) answer(ctx context.Context, b *bot.Bot, query *models.CallbackQuery, text string) {

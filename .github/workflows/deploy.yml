@@ -26,6 +26,10 @@ jobs:
       - uses: actions/setup-go@v5.5.0
         with:
           go-version: '1.25.x'
+      - name: Token rotation regression tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s .github/workflows/tests -p 'test_*.py'
       - run: go mod verify
       - run: go vet ./...
       - run: go test -race -count=1 -timeout=3m ./...
@@ -80,6 +84,9 @@ jobs:
 
   deploy:
     name: Deploy checked main commit
+    concurrency:
+      group: queuebot-production
+      cancel-in-progress: false
     needs: [unit, integration, build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
