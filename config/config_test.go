@@ -10,7 +10,7 @@ import (
 func TestLoadPreservesLegacyDeploymentSettings(t *testing.T) {
 	isolateConfiguration(t)
 	writeConfiguration(t, "config.yaml", "total_slots_in_queue: 12\ndelay_update_queue: 2s\n")
-	writeConfiguration(t, ".env", "TOTAL_SLOTS_IN_QUEUE=20\nAMOUNT_OF_BUTTONS_IN_ROW=4\nDELAY_QUEUE=500ms\nEXIRED_SES_TIME=8m\nWEEK1_DATE=2025-09-01\nWEEK1_TYPE=even\nBOT_CHAT_ID=-1001234567890\n")
+	writeConfiguration(t, ".env", "TOTAL_SLOTS_IN_QUEUE=20\nAMOUNT_OF_BUTTONS_IN_ROW=4\nDELAY_QUEUE=500ms\nEXIRED_SES_TIME=8m\nDEVELOPER_USER_ID=12345\nWEEK1_DATE=2025-09-01\nWEEK1_TYPE=even\nBOT_CHAT_ID=-1001234567890\n")
 	t.Setenv("TOTAL_SLOTS_IN_QUEUE", "25")
 	t.Setenv("DELAY_QUEUE", "750ms")
 	t.Setenv("BOT_TOKEN", "test-token")
@@ -28,7 +28,7 @@ func TestLoadPreservesLegacyDeploymentSettings(t *testing.T) {
 	if cfg.Settings.Week1Date != "2025-09-01" || cfg.Settings.Week1Type != "even" {
 		t.Fatalf("legacy semester configuration = %s %s", cfg.Settings.Week1Date, cfg.Settings.Week1Type)
 	}
-	if cfg.TelegramToken != "test-token" || cfg.ChatId != -1001234567890 || cfg.DeveloperUserID != 789915524 {
+	if cfg.TelegramToken != "test-token" || cfg.ChatId != -1001234567890 || cfg.DeveloperUserID != 12345 {
 		t.Fatal("environment-only infrastructure values were not loaded")
 	}
 }
@@ -68,8 +68,45 @@ func TestLoadKeepsDeveloperIdentityInEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresPositiveDeveloperIdentity(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		value       string
+		unset       bool
+		developerID int64
+	}{
+		{name: "missing", unset: true},
+		{name: "empty"},
+		{name: "zero", value: "0"},
+		{name: "negative", value: "-12345"},
+		{name: "invalid", value: "not-a-telegram-user-id"},
+		{name: "positive", value: "12345", developerID: 12345},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateConfiguration(t)
+			if !tt.unset {
+				t.Setenv("DEVELOPER_USER_ID", tt.value)
+			}
+			cfg, err := Load()
+			if tt.developerID == 0 {
+				if err == nil {
+					t.Fatal("configuration accepted a missing or invalid developer ID")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.DeveloperUserID != tt.developerID {
+				t.Fatalf("developer ID = %d, want %d", cfg.DeveloperUserID, tt.developerID)
+			}
+		})
+	}
+}
+
 func TestLoadHasNoGlobalStateAcrossCalls(t *testing.T) {
 	isolateConfiguration(t)
+	t.Setenv("DEVELOPER_USER_ID", "12345")
 	writeConfiguration(t, "config.yaml", "total_slots_in_queue: 18\n")
 	first, err := Load()
 	if err != nil {
@@ -87,6 +124,7 @@ func TestLoadHasNoGlobalStateAcrossCalls(t *testing.T) {
 
 func TestLoadDoesNotIncludeInvalidEnvironmentValuesInErrors(t *testing.T) {
 	isolateConfiguration(t)
+	t.Setenv("DEVELOPER_USER_ID", "12345")
 	const invalidValue = "private-value-that-must-not-appear-in-errors"
 	t.Setenv("BOT_CHAT_ID", invalidValue)
 	_, err := Load()

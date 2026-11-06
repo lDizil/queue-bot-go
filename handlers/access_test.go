@@ -13,5 +13,5 @@ type testAccessControl struct {
 var _ AccessControl = (*testAccessControl)(nil)
 
 func (control *testAccessControl) Allowed(_ context.Context, id int64, _ access.Permission) (bool, error) {
-	return id == 789915524 || control.admins[id], nil
+	return id == 12345 || control.admins[id], nil
 }
