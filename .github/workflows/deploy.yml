@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-go@v5.5.0
         with:
           go-version: '1.25.x'
-      - name: Token rotation regression tests
+      - name: Deployment and token rotation regression tests
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 -m unittest discover -s .github/workflows/tests -p 'test_*.py'
@@ -103,30 +103,72 @@ jobs:
           envs: DEPLOY_SHA
           command_timeout: 20m
           script: |
+            set +x
             set -eu
-            cd ~/queue-bot-go
+            exec 3>&1
+            exec >/dev/null 2>&1
+            deploy_outcome=failed
+            trap 'deploy_status=$?; if [ "$deploy_status" -ne 0 ]; then deploy_outcome=failed; fi; printf "Deployment %s.\n" "$deploy_outcome" >&3; exit "$deploy_status"' 0
+            umask 077
+            deploy_log_dir="${QUEUEBOT_DEPLOY_STATE_DIR:-$HOME/.local/state/queuebot}"
+            mkdir -p "$deploy_log_dir"
+            chmod 700 "$deploy_log_dir"
+            if [ -f "$deploy_log_dir/deploy.log" ]; then
+              mv -f "$deploy_log_dir/deploy.log" "$deploy_log_dir/deploy.previous.log"
+            fi
+            if [ -f "$deploy_log_dir/deploy.previous.log" ]; then
+              chmod 600 "$deploy_log_dir/deploy.previous.log"
+            fi
+            : > "$deploy_log_dir/deploy.log"
+            chmod 600 "$deploy_log_dir/deploy.log"
+            exec >"$deploy_log_dir/deploy.log" 2>&1
+            cd "${QUEUEBOT_DEPLOY_DIR:-$HOME/queue-bot-go}"
+            printf 'Deploying checked commit %s\n' "$DEPLOY_SHA"
             git fetch origin main
-            if [ "$(git rev-parse origin/main)" != "$DEPLOY_SHA" ]; then
-              echo "Skipping superseded commit $DEPLOY_SHA"
+            deploy_current_sha="$(git rev-parse origin/main)"
+            printf 'Current main: %s\n' "$deploy_current_sha"
+            if [ "$deploy_current_sha" != "$DEPLOY_SHA" ]; then
+              deploy_outcome='skipped (superseded commit)'
               exit 0
             fi
             git reset --hard "$DEPLOY_SHA"
             git clean -fd
             wait_for_ready() {
               queuebot_container="$1"
+              queuebot_expected_state="$2"
+              queuebot_state_format="$3"
               queuebot_attempt=0
               while [ "$queuebot_attempt" -lt 60 ]; do
-                queuebot_state="$(docker inspect --format '{{.State.Status}}:{{.State.Restarting}}:{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$queuebot_container")"
-                if [ "$queuebot_state" = 'running:false:healthy' ]; then
+                queuebot_state="$(docker inspect --format "$queuebot_state_format" "$queuebot_container")"
+                printf '%s: %s\n' "$queuebot_container" "$queuebot_state"
+                if [ "$queuebot_state" = "$queuebot_expected_state" ]; then
                   return 0
                 fi
                 queuebot_attempt=$((queuebot_attempt + 1))
                 sleep 2
               done
+              printf '%s did not become ready\n' "$queuebot_container"
               docker logs "$queuebot_container" --tail 30
               return 1
             }
+            docker compose config --quiet
             docker compose build queuebot
-            docker compose up -d queuebot
-            wait_for_ready queuebot
-            docker compose ps
+            deploy_infra_images="$(docker compose config --images postgres pgadmin)"
+            printf 'Infrastructure images:\n%s\n' "$deploy_infra_images"
+            for deploy_image in $deploy_infra_images; do
+              if ! docker image inspect "$deploy_image"; then
+                docker pull "$deploy_image"
+              fi
+            done
+            git fetch origin main
+            deploy_current_sha="$(git rev-parse origin/main)"
+            printf 'Current main after build: %s\n' "$deploy_current_sha"
+            if [ "$deploy_current_sha" != "$DEPLOY_SHA" ]; then
+              deploy_outcome='skipped (superseded commit)'
+              exit 0
+            fi
+            docker compose stop queuebot
+            docker compose up -d --no-build --pull never postgres pgadmin queuebot
+            wait_for_ready queuebot 'running:false:healthy' '{{.State.Status}}:{{.State.Restarting}}:{{if .State.Health}}{{.State.Health.Status}}{{end}}'
+            wait_for_ready queuebot_pgadmin 'running:false' '{{.State.Status}}:{{.State.Restarting}}'
+            deploy_outcome=ready
