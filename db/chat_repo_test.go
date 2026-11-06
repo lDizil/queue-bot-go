@@ -36,7 +36,8 @@ func TestChatMigrationAndBootstrapPreserveLegacyRunsAndParticipants(t *testing.T
 		} else {
 			id, err = repo.AddNewScheduleEntry(ctx, row)
 			if err == nil {
-				_, err = repo.BeginQueueRun(ctx, id, opensAt, closesAt, 30, 5)
+				_, err = repo.pool.Exec(ctx, `UPDATE schedules SET active_opens_at = $2, active_closes_at = $3,
+ active_thread_id = thread_id, active_capacity = 30, active_columns = 5 WHERE id = $1`, id, opensAt, closesAt)
 			}
 		}
 		if err != nil {
@@ -45,7 +46,7 @@ func TestChatMigrationAndBootstrapPreserveLegacyRunsAndParticipants(t *testing.T
 		if err := repo.SetQueueMessageID(ctx, id, 100+index); err != nil {
 			t.Fatal(err)
 		}
-		if err := repo.JoinQueue(ctx, QueueEntry{ScheduleID: id, UserID: int64(1000 + index), Position: 1, Completed: true}); err != nil {
+		if _, err := repo.pool.Exec(ctx, "INSERT INTO queue_entries (schedule_id, user_id, position, completed) VALUES ($1, $2, 1, true)", id, int64(1000+index)); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, id)

@@ -88,20 +88,25 @@ func (h *BotHandler) SetBot(b *bot.Bot) {
 }
 
 type userState struct {
-	state              string
-	scheduleID         int
-	enteredAt          time.Time
-	chatID             int64
-	threadID           int
-	menu               string
-	configKey          string
-	targetChatID       int64
-	chatSelected       bool
-	moderationRuns     []queue.RunReference
-	moderationRun      queue.RunReference
-	moderationSelected bool
-	moderationPage     int
-	roleTargetID       int64
+	state                   string
+	scheduleID              int
+	enteredAt               time.Time
+	chatID                  int64
+	threadID                int
+	menu                    string
+	configKey               string
+	targetChatID            int64
+	chatSelected            bool
+	moderationRuns          []queue.RunReference
+	moderationRun           queue.RunReference
+	moderationSelected      bool
+	moderationPage          int
+	moderationBlockDuration time.Duration
+	moderationBlockEnabled  bool
+	moderationBlocks        bool
+	moderationBlockIDs      []int
+	moderationBlocksPage    int
+	roleTargetID            int64
 }
 
 func NewBotHandler(ctx context.Context, database *db.DBRepository, cfg *settings.Manager, developerID int64, permissions AccessControl) *BotHandler {

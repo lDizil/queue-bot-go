@@ -8,3 +8,4 @@ scheduler_tick_interval: 1s
 one_shot_delay: 6m
 one_shot_duration: 90m
 update_workers: 4
+moderation_block_duration: 3m

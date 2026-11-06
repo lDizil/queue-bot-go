@@ -27,13 +27,17 @@ var (
 	ErrChanged               = errors.New("участник уже сменил место; используйте обновлённые кнопки")
 	ErrFull                  = errors.New("все места в очереди заняты")
 	ErrPosition              = errors.New("место вне диапазона очереди")
+	ErrBlockChanged          = errors.New("блокировка уже снята или истекла")
+	ErrBlockDuration         = errors.New("срок блокировки должен быть от 0 до 24 часов")
 	ErrMessageMissing        = errors.New("queue message was deleted")
 	ErrLegacyDateUnavailable = errors.New("queue message has no trustworthy original date")
 )
 
 type Store interface {
 	GetStartupSchedules(context.Context) ([]db.Schedule, error)
-	RemoveQueueEntry(context.Context, int, time.Time, int) error
+	RemoveQueueEntry(context.Context, int, time.Time, int, time.Duration) error
+	ListQueueBlocks(context.Context, int, time.Time) ([]db.QueueBlock, error)
+	UnblockQueueEntry(context.Context, int, time.Time, int) error
 	GetScheduleEntry(context.Context, int) (db.Schedule, error)
 	SyncQueueState(context.Context, int) (db.Schedule, error)
 	GetActiveScheduleByTopic(context.Context, int64, int) (db.Schedule, error)
@@ -683,6 +687,10 @@ func (s *Service) Join(ctx context.Context, ref Reference, actor Actor, position
 	} else {
 		err = s.store.JoinQueue(ctx, db.QueueEntry{UserID: actor.ID, Username: actor.Username, DisplayName: actor.DisplayName, ScheduleID: schedule.ID, Position: position})
 	}
+	var blocked *db.RejoinBlockedError
+	if errors.As(err, &blocked) {
+		return 0, err
+	}
 	if err != nil {
 		state.uncertain = true
 		s.scheduleUpdate(state, schedule.ID, s.settings.Values().DelayUpdateQueue)
@@ -908,13 +916,18 @@ func (s *Service) worker() {
 }
 
 func ErrorText(err error) string {
+	var blocked *db.RejoinBlockedError
+	if errors.As(err, &blocked) {
+		seconds := max(1, int((time.Until(blocked.Until)+time.Second-1)/time.Second))
+		return fmt.Sprintf("После удаления из очереди повторный вход временно закрыт. Попробуйте через %d сек.", seconds)
+	}
 	if errors.Is(err, db.ErrTopicBusy) {
 		return "В этой теме уже есть действующая очередь"
 	}
 	if errors.Is(err, db.ErrQueueStateChanged) {
 		return ErrChanged.Error()
 	}
-	for _, known := range []error{ErrClosed, ErrStale, ErrNotJoined, ErrAlreadyJoined, ErrOccupied, ErrForbidden, ErrChanged, ErrFull, ErrPosition} {
+	for _, known := range []error{ErrClosed, ErrStale, ErrNotJoined, ErrAlreadyJoined, ErrOccupied, ErrForbidden, ErrChanged, ErrFull, ErrPosition, ErrBlockDuration, ErrBlockChanged} {
 		if errors.Is(err, known) {
 			return known.Error()
 		}

@@ -9,30 +9,32 @@ import (
 )
 
 type Values struct {
-	TotalSlotsInQueue     int           `json:"total_slots_in_queue" mapstructure:"total_slots_in_queue"`
-	AmountOfButtonsInRow  int           `json:"amount_of_buttons_in_row" mapstructure:"amount_of_buttons_in_row"`
-	DelayUpdateQueue      time.Duration `json:"delay_update_queue" mapstructure:"delay_update_queue"`
-	TimeForExpiredEditSes time.Duration `json:"edit_session_timeout" mapstructure:"edit_session_timeout"`
-	Week1Date             string        `json:"week1_date" mapstructure:"week1_date"`
-	Week1Type             string        `json:"week1_type" mapstructure:"week1_type"`
-	SchedulerTickInterval time.Duration `json:"scheduler_tick_interval" mapstructure:"scheduler_tick_interval"`
-	OneShotDelay          time.Duration `json:"one_shot_delay" mapstructure:"one_shot_delay"`
-	OneShotDuration       time.Duration `json:"one_shot_duration" mapstructure:"one_shot_duration"`
-	UpdateWorkers         int           `json:"update_workers" mapstructure:"update_workers"`
+	TotalSlotsInQueue       int           `json:"total_slots_in_queue" mapstructure:"total_slots_in_queue"`
+	AmountOfButtonsInRow    int           `json:"amount_of_buttons_in_row" mapstructure:"amount_of_buttons_in_row"`
+	DelayUpdateQueue        time.Duration `json:"delay_update_queue" mapstructure:"delay_update_queue"`
+	TimeForExpiredEditSes   time.Duration `json:"edit_session_timeout" mapstructure:"edit_session_timeout"`
+	Week1Date               string        `json:"week1_date" mapstructure:"week1_date"`
+	Week1Type               string        `json:"week1_type" mapstructure:"week1_type"`
+	SchedulerTickInterval   time.Duration `json:"scheduler_tick_interval" mapstructure:"scheduler_tick_interval"`
+	OneShotDelay            time.Duration `json:"one_shot_delay" mapstructure:"one_shot_delay"`
+	OneShotDuration         time.Duration `json:"one_shot_duration" mapstructure:"one_shot_duration"`
+	UpdateWorkers           int           `json:"update_workers" mapstructure:"update_workers"`
+	ModerationBlockDuration time.Duration `json:"moderation_block_duration" mapstructure:"moderation_block_duration"`
 }
 
 func Defaults() Values {
 	return Values{
-		TotalSlotsInQueue:     30,
-		AmountOfButtonsInRow:  5,
-		DelayUpdateQueue:      400 * time.Millisecond,
-		TimeForExpiredEditSes: 4 * time.Minute,
-		Week1Date:             "2026-04-10",
-		Week1Type:             "odd",
-		SchedulerTickInterval: time.Second,
-		OneShotDelay:          6 * time.Minute,
-		OneShotDuration:       90 * time.Minute,
-		UpdateWorkers:         4,
+		TotalSlotsInQueue:       30,
+		AmountOfButtonsInRow:    5,
+		DelayUpdateQueue:        400 * time.Millisecond,
+		TimeForExpiredEditSes:   4 * time.Minute,
+		Week1Date:               "2026-04-10",
+		Week1Type:               "odd",
+		SchedulerTickInterval:   time.Second,
+		OneShotDelay:            6 * time.Minute,
+		OneShotDuration:         90 * time.Minute,
+		UpdateWorkers:           4,
+		ModerationBlockDuration: 3 * time.Minute,
 	}
 }
 
@@ -64,6 +66,9 @@ func (v Values) Validate() error {
 	}
 	if v.OneShotDuration < time.Minute || v.OneShotDuration > 7*24*time.Hour {
 		return errors.New("one_shot_duration must be between 1m and 168h")
+	}
+	if v.ModerationBlockDuration < time.Second || v.ModerationBlockDuration > 24*time.Hour {
+		return errors.New("moderation_block_duration must be between 1s and 24h")
 	}
 	if v.UpdateWorkers < 1 || v.UpdateWorkers > 32 {
 		return errors.New("update_workers must be between 1 and 32")

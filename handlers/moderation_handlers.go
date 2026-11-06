@@ -23,6 +23,7 @@ func (h *BotHandler) ManageQueue(ctx context.Context, b *bot.Bot, update *models
 	if userID == 0 || h.queues == nil {
 		return
 	}
+	mode := userState{moderationBlockDuration: h.settings.Values().ModerationBlockDuration}
 	var (
 		snapshots []queue.Snapshot
 		selected  queue.RunReference
@@ -75,7 +76,7 @@ func (h *BotHandler) ManageQueue(ctx context.Context, b *bot.Bot, update *models
 			return
 		}
 		snapshots = []queue.Snapshot{snapshot}
-		text, markup = h.moderationParticipants(ctx, snapshot)
+		text, markup = h.moderationParticipants(ctx, snapshot, mode)
 	} else {
 		var err error
 		h.enrichModerationChats(ctx)
@@ -93,6 +94,7 @@ func (h *BotHandler) ManageQueue(ctx context.Context, b *bot.Bot, update *models
 	}
 	h.stateMu.Lock()
 	session := h.userState[userID]
+	session.moderationBlockDuration = mode.moderationBlockDuration
 	session.moderationRuns = moderationReferences(snapshots)
 	session.moderationRun, session.moderationSelected, session.moderationPage = selected, update.CallbackQuery != nil, page
 	h.userState[userID] = session
@@ -246,11 +248,13 @@ func (h *BotHandler) SelectModerationQueue(ctx context.Context, b *bot.Bot, upda
 		return
 	}
 	session.moderationRun, session.moderationSelected = selected, true
+	session.moderationBlocks = false
+	session.moderationBlockIDs = nil
 	session.enteredAt = time.Now()
 	h.stateMu.Lock()
 	h.userState[query.From.ID] = session
 	h.stateMu.Unlock()
-	text, markup := h.moderationParticipants(ctx, snapshot)
+	text, markup := h.moderationParticipants(ctx, snapshot, session)
 	_ = h.editMenu(ctx, b, query.From.ID, text, markup)
 	h.answer(ctx, b, query, "")
 }
@@ -265,14 +269,14 @@ func (h *BotHandler) moderationSession(ctx context.Context, update *models.Updat
 	return session, session.menu == "moderation"
 }
 
-func (h *BotHandler) moderationParticipants(ctx context.Context, snapshot queue.Snapshot) (string, *models.InlineKeyboardMarkup) {
-	var groupName string
-	if h.db != nil {
-		if chat, err := h.db.GetChat(ctx, snapshot.Schedule.ChatID); err == nil {
-			groupName = chat.Name
-		}
+func (h *BotHandler) moderationParticipants(ctx context.Context, snapshot queue.Snapshot, session userState) (string, *models.InlineKeyboardMarkup) {
+	blockFor := moderationRemovalDuration(session)
+	text := h.moderationHeader(ctx, snapshot.Schedule) + "\n\nНажмите на участника, чтобы убрать его из очереди."
+	if blockFor == 0 {
+		text += " Повторная запись разрешена."
+	} else {
+		text += " Повторная запись будет заблокирована на " + moderationDuration(blockFor) + "."
 	}
-	text := moderationQueueDetails(snapshot.Schedule, groupName) + "\n\nНажмите на участника, чтобы убрать его из очереди. Повторная запись разрешена."
 	if len(snapshot.Entries) == 0 {
 		text += "\n\nОчередь пуста."
 	}
@@ -295,7 +299,7 @@ func (h *BotHandler) moderationParticipants(ctx context.Context, snapshot queue.
 		if entry.Completed {
 			mark = " ✅"
 		}
-		row = append(row, models.InlineKeyboardButton{Text: fmt.Sprintf("%d. %s%s", entry.Position, queueLabel(name, 30), mark), CallbackData: fmt.Sprintf("ModerationRemove:%d", entry.ID)})
+		row = append(row, models.InlineKeyboardButton{Text: fmt.Sprintf("%d. %s%s", entry.Position, queueLabel(name, 30), mark), CallbackData: fmt.Sprintf("ModerationRemove:%d:%d", entry.ID, blockFor)})
 		if len(row) == columns {
 			keyboard = append(keyboard, row)
 			row = nil
@@ -304,8 +308,26 @@ func (h *BotHandler) moderationParticipants(ctx context.Context, snapshot queue.
 	if len(row) > 0 {
 		keyboard = append(keyboard, row)
 	}
+	target := session.moderationBlockDuration
+	label := "Удаление: без блокировки"
+	if session.moderationBlockEnabled {
+		target = 0
+		label = "Удаление: с блокировкой на " + moderationDuration(session.moderationBlockDuration)
+	}
+	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: label, CallbackData: fmt.Sprintf("ModerationMode:%d", target)}})
+	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Временные блокировки", CallbackData: "ModerationBlocks"}})
 	keyboard = append(keyboard, moderationNavigation()...)
 	return text, &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
+}
+
+func (h *BotHandler) moderationHeader(ctx context.Context, schedule db.Schedule) string {
+	var groupName string
+	if h.db != nil {
+		if chat, err := h.db.GetChat(ctx, schedule.ChatID); err == nil {
+			groupName = chat.Name
+		}
+	}
+	return moderationQueueDetails(schedule, groupName)
 }
 
 func moderationNavigation() [][]models.InlineKeyboardButton {
@@ -321,12 +343,21 @@ func (h *BotHandler) RemoveParticipant(ctx context.Context, b *bot.Bot, update *
 		return
 	}
 	query := update.CallbackQuery
-	entryID, err := strconv.Atoi(strings.TrimPrefix(query.Data, "ModerationRemove:"))
-	if err != nil || entryID <= 0 {
+	if session.moderationBlocks {
+		return
+	}
+	parts := strings.Split(query.Data, ":")
+	if len(parts) != 3 || parts[0] != "ModerationRemove" {
 		h.answer(ctx, b, query, "Некорректная кнопка участника")
 		return
 	}
-	if err := h.queues.Remove(ctx, session.moderationRun, query.From.ID, entryID); err != nil {
+	entryID, err := strconv.Atoi(parts[1])
+	blockFor, durationErr := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || entryID <= 0 || durationErr != nil || time.Duration(blockFor) != moderationRemovalDuration(session) {
+		h.answer(ctx, b, query, "Кнопка устарела. Выберите участника заново")
+		return
+	}
+	if err := h.queues.Remove(ctx, session.moderationRun, query.From.ID, entryID, time.Duration(blockFor)); err != nil {
 		h.answer(ctx, b, query, queue.ErrorText(err))
 		return
 	}
@@ -367,6 +398,8 @@ func (h *BotHandler) showModerationList(ctx context.Context, b *bot.Bot, update 
 	}
 	text, markup, page := h.moderationList(ctx, snapshots, page)
 	session.moderationSelected = false
+	session.moderationBlocks = false
+	session.moderationBlockIDs = nil
 	session.moderationRun = queue.RunReference{}
 	session.moderationRuns = moderationReferences(snapshots)
 	session.moderationPage = page
@@ -432,7 +465,19 @@ func (h *BotHandler) refreshModerationSession(ctx context.Context, b *bot.Bot, u
 		snapshot, err := h.queues.InspectRun(ctx, session.moderationRun)
 		switch {
 		case err == nil:
-			text, markup = h.moderationParticipants(ctx, snapshot)
+			if session.moderationBlocks {
+				var blocks []db.QueueBlock
+				blocks, err = h.queues.Blocks(ctx, session.moderationRun, userID)
+				if err != nil {
+					return lastContent, true
+				}
+				text, markup = moderationBlockList(h.moderationHeader(ctx, snapshot.Schedule), blocks, &session)
+				h.stateMu.Lock()
+				h.userState[userID] = session
+				h.stateMu.Unlock()
+			} else {
+				text, markup = h.moderationParticipants(ctx, snapshot, session)
+			}
 		case errors.Is(err, queue.ErrClosed), errors.Is(err, queue.ErrStale):
 			text = "Эта очередь закрыта. Выберите другую открытую очередь."
 			markup = &models.InlineKeyboardMarkup{InlineKeyboard: moderationNavigation()}

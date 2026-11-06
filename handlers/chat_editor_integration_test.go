@@ -197,8 +197,11 @@ func TestLegacyUnassignedSchedulesRemainVisibleWithoutChatMetadataActions(t *tes
 		t.Fatal("legacy schedules without a chat disappeared from the menu")
 	}
 	processTelegramUpdates(t, h, telegram, chatEditorCallback(h, h.developerID, "SelectChat:0"))
-	if !strings.Contains(lastMenuText(t, api), "Старая запись") {
+	if !strings.Contains(lastMenuMarkup(t, api), "Старая запись") {
 		t.Fatal("virtual chat did not show its legacy schedule")
+	}
+	if strings.Contains(lastMenuText(t, api), "Старая запись") {
+		t.Fatal("schedule titles are duplicated above their buttons")
 	}
 	markup := lastMenuMarkup(t, api)
 	for _, forbidden := range []string{"AddNewSchedule:", "SetDefaultChat:", "RenameChat:"} {

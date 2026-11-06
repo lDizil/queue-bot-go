@@ -32,6 +32,7 @@ var configFields = []configField{
 	{"week1_type", "Тип опорной недели", "Введите чётная или нечётная. Можно также even или odd."},
 	{"scheduler_tick_interval", "Интервал проверки расписания", "Введите длительность от 100ms до 1m, например 1s."},
 	{"one_shot_delay", "До открытия разовой очереди", "Введите длительность от 1m до 168h, например 6m. Применится к новым очередям."},
+	{"moderation_block_duration", "Блокировка повторной записи", "Введите длительность от 1s до 24h, например 3m. Применится к новым сессиям управления участниками."},
 	{"one_shot_duration", "Длительность разовой очереди", "Введите длительность от 1m до 168h, например 90m. Применится к новым очередям."},
 }
 
@@ -160,7 +161,7 @@ func changeConfigValue(values *settings.Values, key, input string) error {
 			input = translated
 		}
 		values.Week1Type = input
-	case "delay_update_queue", "edit_session_timeout", "scheduler_tick_interval", "one_shot_delay", "one_shot_duration":
+	case "delay_update_queue", "edit_session_timeout", "scheduler_tick_interval", "one_shot_delay", "one_shot_duration", "moderation_block_duration":
 		duration, err := time.ParseDuration(input)
 		if err != nil {
 			return err
@@ -176,6 +177,8 @@ func changeConfigValue(values *settings.Values, key, input string) error {
 			values.OneShotDelay = duration
 		case "one_shot_duration":
 			values.OneShotDuration = duration
+		case "moderation_block_duration":
+			values.ModerationBlockDuration = duration
 		}
 	default:
 		return errInvalidConfigInput
@@ -348,6 +351,8 @@ func configValue(values settings.Values, key string) string {
 		return configDuration(values.OneShotDelay)
 	case "one_shot_duration":
 		return configDuration(values.OneShotDuration)
+	case "moderation_block_duration":
+		return configDuration(values.ModerationBlockDuration)
 	}
 	return ""
 }
