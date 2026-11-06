@@ -70,7 +70,7 @@ func Load() (Config, error) {
 		return Config{}, errors.New("invalid configuration values; check config.yaml and environment variables")
 	}
 	if cfg.DeveloperUserID <= 0 {
-		return Config{}, errors.New("DEVELOPER_USER_ID must be positive")
+		return Config{}, errors.New("DEVELOPER_USER_ID must be set to a positive Telegram user ID")
 	}
 	if err := cfg.Settings.Validate(); err != nil {
 		return Config{}, fmt.Errorf("invalid configuration: %w", err)
@@ -99,7 +99,6 @@ func mergePublicSettings(values *viper.Viper) error {
 
 func setDefaults(values *viper.Viper) {
 	defaults := settings.Defaults()
-	values.SetDefault("developer_user_id", int64(789915524))
 	values.SetDefault("total_slots_in_queue", defaults.TotalSlotsInQueue)
 	values.SetDefault("amount_of_buttons_in_row", defaults.AmountOfButtonsInRow)
 	values.SetDefault("delay_update_queue", defaults.DelayUpdateQueue)

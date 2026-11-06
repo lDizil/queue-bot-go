@@ -228,7 +228,7 @@ func newConfigTestHandler(t *testing.T, menu string) (*BotHandler, *bot.Bot, *co
 	if err != nil {
 		t.Fatal(err)
 	}
-	const developerID = int64(789915524)
+	const developerID = int64(12345)
 	handler := &BotHandler{
 		settings:         manager,
 		developerID:      developerID,

@@ -194,7 +194,7 @@ func newTelegramAdapter(t *testing.T) (*BotHandler, *bot.Bot, *telegramAdapterAP
 	if err != nil {
 		t.Fatal(err)
 	}
-	const developerID = int64(789915524)
+	const developerID = int64(12345)
 	handler := NewBotHandler(t.Context(), nil, manager, developerID, &testAccessControl{admins: map[int64]bool{123: true}})
 	server := httptest.NewServer(http.HandlerFunc(api.serveHTTP))
 	t.Cleanup(server.Close)
