@@ -18,140 +18,86 @@ func (h *BotHandler) Back(ctx context.Context, b *bot.Bot, update *models.Update
 	query, data, chatID, userID, username := h.getAllReplyInfo(update)
 	h.stateMu.Lock()
 	session := h.userState[userID]
-	session.state = ""
-	session.scheduleID = 0
+	session.state, session.scheduleID = "", 0
 	h.userState[userID] = session
 	h.stateMu.Unlock()
 
-	schedules, err := h.schedulesInChat(ctx, chatID)
-	if err != nil {
-		log.Printf("Ошибка получения очереди (пользователь %s). %v", username, err)
-		return
-	}
-
-	var markup *models.InlineKeyboardMarkup
-
-	parts := strings.Split(data, ":")
-	returnTo := parts[1]
-
 	var text string
-
-	switch returnTo {
+	var markup *models.InlineKeyboardMarkup
+	var err error
+	parts := strings.Split(data, ":")
+	switch parts[1] {
 	case "mainmenu":
-		text = "Вы вернулись к предыдущему меню редактирования.\nМожете продолжить вносить изменения.\n"
-		_, markup = h.GenerateEditMessage(schedules)
+		text, markup, err = h.selectedChatMenu(ctx, userID)
 	case "editschmenu":
-		scheduleID, err := strconv.Atoi(parts[2])
-
-		if err != nil {
-			msg := fmt.Sprintf("Ошибка преобразования айди записи в число (пользователь %s).\nОшибка: %v", username, err)
-			h.handleError(ctx, b, query.ID, msg)
+		scheduleID, parseErr := strconv.Atoi(parts[2])
+		if parseErr != nil {
 			return
 		}
-
-		schedule, err := h.db.GetScheduleEntry(ctx, scheduleID)
-
-		if err != nil {
-			msg := fmt.Sprintf("Ошибка при получении записи (пользователь %s).\nОшибка: %v", username, err)
-			h.handleError(ctx, b, query.ID, msg)
-			return
+		var schedule db.Schedule
+		schedule, err = h.selectedSchedule(ctx, userID, scheduleID)
+		if err == nil {
+			text, markup = h.GenerateEditScheduleMenu(schedule)
 		}
-
-		text, markup = h.GenerateEditScheduleMenu(schedule)
 	case "editschtime":
-		scheduleID, err := strconv.Atoi(parts[2])
-
-		if err != nil {
-			msg := fmt.Sprintf("Ошибка преобразования айди записи в число (пользователь %s).\nОшибка: %v", username, err)
-			h.handleError(ctx, b, query.ID, msg)
+		scheduleID, parseErr := strconv.Atoi(parts[2])
+		if parseErr != nil {
 			return
 		}
-
-		text = "Вы вернулись к выбору времени для редактирования"
+		text = "Выберите время для редактирования"
 		markup = h.GenerateEditTimeMenu(scheduleID)
 	default:
-		msg := fmt.Sprintf("Не найден путь возврата %s в меню изменения очереди (пользователь %s). %v", returnTo, username, err)
-		h.handleError(ctx, b, query.ID, msg)
 		return
 	}
-
-	h.editMu.RLock()
-	editMesID, _ := h.editMessages[userID]
-	h.editMu.RUnlock()
-
-	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:      chatID,
-		MessageID:   editMesID,
-		Text:        text,
-		ReplyMarkup: markup,
-	})
-
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка при возврате в главное меню (кнопка назад, пользователь %s). %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
+		h.handleError(ctx, b, query.ID, fmt.Sprintf("return to selected chat menu (user %s): %v", username, err))
 		return
 	}
+	h.editConfigText(ctx, b, chatID, query.Message.Message.ID, text, markup)
+	h.answer(ctx, b, query, "")
 }
 
 func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, update *models.Update) {
 	msg := update.Message
-	username := msg.From.Username
 	userID := msg.From.ID
 	chatID := msg.Chat.ID
-
-	schedules, err := h.schedulesInChat(ctx, chatID)
-	if err != nil {
-		log.Printf("Ошибка получения очереди (пользователь %s). %v", username, err)
-		return
-	}
-
 	h.stateMu.Lock()
 	delete(h.userState, userID)
 	h.stateMu.Unlock()
 	h.editMu.Lock()
-	oldMesID, exists := h.editMessages[userID]
-	oldChatID, chatExists := h.editMessageChats[userID]
+	oldMessageID := h.editMessages[userID]
+	oldChatID := h.editMessageChats[userID]
 	delete(h.editMessages, userID)
 	delete(h.editMessageChats, userID)
 	h.editMu.Unlock()
-
-	if exists {
-		deleteChatID := chatID
-		if chatExists {
-			deleteChatID = oldChatID
+	if oldMessageID != 0 {
+		if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: oldChatID, MessageID: oldMessageID}); err != nil {
+			log.Printf("delete previous schedule menu: %v", err)
 		}
-		b.DeleteMessage(ctx, &bot.DeleteMessageParams{
-			ChatID:    deleteChatID,
-			MessageID: oldMesID,
-		})
 	}
-
-	text, markup := h.GenerateEditMessage(schedules)
-
-	msg, err = b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:          chatID,
-		Text:            text,
-		ReplyMarkup:     markup,
-		MessageThreadID: msg.MessageThreadID,
-	})
-
+	if h.chats != nil && chatID < 0 {
+		if err := h.chats.Remember(ctx, chatID, msg.Chat.Title); err != nil {
+			log.Printf("remember schedule chat: %v", err)
+		}
+	}
+	text, markup, err := h.chatListMenu(ctx, 0)
 	if err != nil {
-		log.Printf("Ошибка при попытке отправить сообщения для редактирования расписания (пользователь %s). %v", username, err)
+		log.Printf("read schedule chats: %v", err)
+		h.sendSwapInfoMessage(ctx, b, chatID, msg.MessageThreadID, "Не удалось получить список чатов. Повторите /edit_schedule")
 		return
 	}
-
+	message, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, MessageThreadID: msg.MessageThreadID, Text: text, ReplyMarkup: markup})
+	if err != nil {
+		log.Printf("send schedule chat menu: %v", err)
+		return
+	}
 	h.editMu.Lock()
-	h.editMessages[userID] = msg.ID
+	h.editMessages[userID] = message.ID
 	h.editMessageChats[userID] = chatID
 	h.editMu.Unlock()
-
-	newState := userState{menu: "schedule", enteredAt: time.Now(), chatID: chatID, threadID: msg.MessageThreadID}
-
 	h.stateMu.Lock()
-	h.userState[userID] = newState
+	h.userState[userID] = userState{menu: "schedule", enteredAt: time.Now(), chatID: chatID, threadID: msg.MessageThreadID}
 	h.stateMu.Unlock()
-
-	log.Printf("Сообщение для редактирования очереди (id: %d) отправлено в чат", msg.ID)
 }
 
 func (h *BotHandler) EditScheduleEntry(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -169,7 +115,7 @@ func (h *BotHandler) EditScheduleEntry(ctx context.Context, b *bot.Bot, update *
 	editMesID, _ := h.editMessages[userID]
 	h.editMu.RUnlock()
 
-	schedule, err := h.db.GetScheduleEntry(ctx, scheduleID)
+	schedule, err := h.selectedSchedule(ctx, userID, scheduleID)
 
 	if err != nil {
 		msg := fmt.Sprintf("Ошибка при получении записи (пользователь %s).\nОшибка: %v", username, err)
@@ -273,6 +219,14 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 	h.stateMu.RLock()
 	curState := h.userState[userID]
 	h.stateMu.RUnlock()
+	if h.chats == nil || curState.targetChatID == 0 {
+		h.EditMesWithError(ctx, b, chatID, editMesID, "Сначала выберите чат", models.InlineKeyboardButton{Text: "К чатам", CallbackData: "ChatList"})
+		return
+	}
+	if _, err := h.chats.Get(ctx, curState.targetChatID); err != nil {
+		h.EditMesWithError(ctx, b, chatID, editMesID, "Выбранный чат недоступен", models.InlineKeyboardButton{Text: "К чатам", CallbackData: "ChatList"})
+		return
+	}
 
 	reader := csv.NewReader(strings.NewReader(strings.TrimSpace(data)))
 	reader.TrimLeadingSpace = true
@@ -327,7 +281,7 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 		weekType = newSchData[1]
 	}
 	schedule := db.Schedule{
-		ChatID:            h.scheduleChatID(chatID),
+		ChatID:            curState.targetChatID,
 		DayOfWeek:         day,
 		WeekType:          weekType,
 		StartTime:         startTime,
@@ -377,13 +331,11 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 		return
 	}
 
-	schedules, err := h.schedulesInChat(ctx, chatID)
+	text, markup, err := h.selectedChatMenu(ctx, userID)
 	if err != nil {
-		log.Printf("Ошибка получения очереди (пользователь %s). %v", username, err)
+		log.Printf("read selected schedule chat (user %s): %v", username, err)
 		return
 	}
-
-	text, markup := h.GenerateEditMessage(schedules)
 
 	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:          chatID,
@@ -433,20 +385,21 @@ func (h *BotHandler) DeleteScheduleEntry(ctx context.Context, b *bot.Bot, update
 		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
 	}
 
-	schedules, err := h.schedulesInChat(ctx, chatID)
-
+	h.stateMu.Lock()
+	session := h.userState[userID]
+	session.state, session.scheduleID = "", 0
+	h.userState[userID] = session
+	h.stateMu.Unlock()
+	text, markup, err := h.selectedChatMenu(ctx, userID)
 	if err != nil {
-		msg := fmt.Sprintf("Ошибка при получении записи (пользователь %s).\nОшибка: %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
+		h.handleError(ctx, b, query.ID, fmt.Sprintf("read selected chat after deleting schedule: %v", err))
 		return
 	}
-
-	_, markup := h.GenerateEditMessage(schedules)
 
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:      chatID,
 		MessageID:   editMesID,
-		Text:        "Запись успешно удалена.\nМожете продолжить вносить изменения.\n",
+		Text:        "Запись успешно удалена.\n\n" + text,
 		ReplyMarkup: markup,
 	})
 

@@ -89,7 +89,7 @@ func (h *BotHandler) isValidData(data []string) bool {
 }
 
 func (h *BotHandler) ReturnToEditSchMenu(ctx context.Context, b *bot.Bot, scheduleID int, username string, query *models.CallbackQuery, chatID int64, editMesID int) error {
-	schedule, err := h.db.GetScheduleEntry(ctx, scheduleID)
+	schedule, err := h.selectedSchedule(ctx, query.From.ID, scheduleID)
 
 	if err != nil {
 		msg := fmt.Sprintf("Ошибка при получении записи (пользователь %s).\nОшибка: %v", username, err)
@@ -159,20 +159,10 @@ func parseScheduleTime(value string) (time.Time, error) {
 	return parsed, nil
 }
 
-func (h *BotHandler) scheduleChatID(chatID int64) int64 {
-	if chatID > 0 {
-		return h.defaultChatID
-	}
-	return chatID
-}
-
 func (h *BotHandler) schedulesInChat(ctx context.Context, chatID int64) ([]db.Schedule, error) {
 	schedules, err := h.db.GetAllSchedules(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if chatID > 0 {
-		return schedules, nil
 	}
 	var filtered []db.Schedule
 	for _, schedule := range schedules {

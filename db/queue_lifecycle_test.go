@@ -307,7 +307,7 @@ func TestLifecycleMigrationPreservesLegacyDuplicatesAndRollsBack(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO queue_entries (user_id, schedule_id, position) VALUES (99, $1, 1), (99, $1, 2)`, scheduleID); err != nil {
 		t.Fatal(err)
 	}
-	if err := migrations.Up(); err != nil {
+	if err := migrations.Migrate(8); err != nil {
 		t.Fatal(err)
 	}
 	checkLegacyRows := func() {
@@ -329,7 +329,7 @@ func TestLifecycleMigrationPreservesLegacyDuplicatesAndRollsBack(t *testing.T) {
 		t.Fatalf("rollback without optional index: %v", err)
 	}
 	checkLegacyRows()
-	if err := migrations.Up(); err != nil {
+	if err := migrations.Migrate(8); err != nil {
 		t.Fatalf("reapply: %v", err)
 	}
 	checkLegacyRows()

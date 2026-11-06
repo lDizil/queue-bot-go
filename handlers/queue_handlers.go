@@ -23,15 +23,16 @@ var _ queue.LegacyMessenger = (*BotHandler)(nil)
 func (h *BotHandler) RunOneShotQueue(ctx context.Context, b *bot.Bot, update *models.Update) {
 	msg := update.Message
 	title := strings.TrimSpace(strings.TrimPrefix(msg.Text, strings.Fields(msg.Text)[0]))
-	if h.scheduleChatID(msg.Chat.ID) == 0 {
-		h.sendSwapInfoMessage(ctx, b, msg.Chat.ID, msg.MessageThreadID, "Выполните команду в группе, где нужна очередь")
+	target, err := h.commandTarget(ctx, msg.Chat.ID)
+	if err != nil {
+		h.sendSwapInfoMessage(ctx, b, msg.Chat.ID, msg.MessageThreadID, "Не удалось определить чат. Выберите основной через /edit_schedule или выполните команду в нужной группе")
 		return
 	}
 	if len([]rune(title)) > 200 {
 		h.sendSwapInfoMessage(ctx, b, msg.Chat.ID, msg.MessageThreadID, "Заголовок должен быть не длиннее 200 символов")
 		return
 	}
-	if err := h.scheduler.RunInstant(ctx, h.scheduleChatID(msg.Chat.ID), msg.MessageThreadID, title); err != nil {
+	if err := h.scheduler.RunInstant(ctx, target, msg.MessageThreadID, title); err != nil {
 		h.sendSwapInfoMessage(ctx, b, msg.Chat.ID, msg.MessageThreadID, queue.ErrorText(err))
 		return
 	}
@@ -203,7 +204,12 @@ func (h *BotHandler) EditQueue(ctx context.Context, snapshot queue.Snapshot, mes
 
 func (h *BotHandler) RecoverQueue(ctx context.Context, b *bot.Bot, update *models.Update) {
 	message := update.Message
-	if err := h.queues.RecoverTopic(ctx, h.scheduleChatID(message.Chat.ID), message.MessageThreadID); err != nil {
+	target, err := h.commandTarget(ctx, message.Chat.ID)
+	if err != nil {
+		h.sendSwapInfoMessage(ctx, b, message.Chat.ID, message.MessageThreadID, "Основной чат не выбран. Выберите его через /edit_schedule")
+		return
+	}
+	if err := h.queues.RecoverTopic(ctx, target, message.MessageThreadID); err != nil {
 		h.sendSwapInfoMessage(ctx, b, message.Chat.ID, message.MessageThreadID, queue.ErrorText(err))
 		return
 	}

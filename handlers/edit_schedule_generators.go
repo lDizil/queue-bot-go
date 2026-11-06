@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"queuebot/chats"
 	"queuebot/db"
 	u "queuebot/utils"
 	"strconv"
@@ -13,13 +14,28 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
-func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *models.InlineKeyboardMarkup) {
-	text := "Вы вошли в режим редактирования.\nМожете изменить существующие записи или добавить новые.\n\n"
+func (h *BotHandler) GenerateEditMessage(chat chats.Chat, schedules []db.Schedule, developer bool) (string, *models.InlineKeyboardMarkup) {
+	text := chatName(chat)
+	if chat.ID != 0 {
+		text += fmt.Sprintf(" · %d", chat.ID)
+	}
+	text += "\n"
+	if chat.ID != 0 {
+		status := "нет"
+		if chat.IsDefault {
+			status = "да"
+		}
+		text += "Основной чат: " + status + "\n"
+	}
+	if chat.ID == 0 {
+		text += "У старых записей не определён чат. Создать новые очереди здесь нельзя.\n"
+	}
+	text += "\nРасписание выбранного чата. Можно изменить существующие записи.\n\n"
 
 	values := h.settings.Values()
 	anchor, _ := time.Parse("2006-01-02", values.Week1Date)
 	curWeekType := u.WeekTypeForDate(time.Now(), anchor, values.Week1Type)
-	text += fmt.Sprintf("Текущая неделя: %s\n", weekTypeEnToRu[curWeekType])
+	text += fmt.Sprintf("Текущая неделя для всех чатов: %s\n", weekTypeEnToRu[curWeekType])
 	var builder strings.Builder
 
 	builder.Grow(120 + len(schedules)*30)
@@ -56,11 +72,17 @@ func (h *BotHandler) GenerateEditMessage(schedules []db.Schedule) (string, *mode
 
 	btn := models.InlineKeyboardButton{
 		Text:         "Добавить новую запись",
-		CallbackData: "AddNewSchedule",
+		CallbackData: fmt.Sprintf("AddNewSchedule:%d", chat.ID),
 	}
 
-	keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-
+	if chat.ID != 0 {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Изменить название чата", CallbackData: fmt.Sprintf("RenameChat:%d", chat.ID)}})
+	}
+	if developer && chat.ID != 0 && !chat.IsDefault {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Сделать основным", CallbackData: fmt.Sprintf("SetDefaultChat:%d", chat.ID)}})
+	}
+	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "К чатам", CallbackData: "ChatList"}})
 	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Сменить тип недели", CallbackData: fmt.Sprintf("SetCurrentWeek:%s:%s", configWeekMonday(time.Now()).Format("2006-01-02"), u.SwitchWeekType[curWeekType])}})
 
 	btn = models.InlineKeyboardButton{
@@ -80,6 +102,7 @@ func (h *BotHandler) GenerateEditScheduleMenu(sch db.Schedule) (string, *models.
 	}
 
 	text := fmt.Sprintf(`Вы перешли к редактированию записи в расписании.
+Чат: %d
 
 День недели: %s
 Время (нач-кон): %s-%s
@@ -88,7 +111,7 @@ func (h *BotHandler) GenerateEditScheduleMenu(sch db.Schedule) (string, *models.
 
 Заголовок: %s
 Описание: %s`,
-		dayEnToRu[sch.DayOfWeek], sch.StartTime.Format("15:04:05"), sch.EndTime.Format("15:04:05"), weekTypeEnToRu[sch.WeekType], sch.ThreadID, sch.Title, desc)
+		sch.ChatID, dayEnToRu[sch.DayOfWeek], sch.StartTime.Format("15:04:05"), sch.EndTime.Format("15:04:05"), weekTypeEnToRu[sch.WeekType], sch.ThreadID, sch.Title, desc)
 
 	keyboard := [][]models.InlineKeyboardButton{}
 	var btn models.InlineKeyboardButton
