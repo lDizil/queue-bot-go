@@ -100,6 +100,7 @@ type userState struct {
 	moderationRuns     []queue.RunReference
 	moderationRun      queue.RunReference
 	moderationSelected bool
+	moderationPage     int
 	roleTargetID       int64
 }
 
@@ -169,7 +170,7 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 	}
 
 	switch curState.state {
-	case "role_add":
+	case "role_add", "role_label":
 		h.handleRoleInput(ctx, b, update)
 	case "add_chat", "rename_chat":
 		h.HandleChatInput(ctx, b, update)
@@ -216,7 +217,7 @@ func (h *BotHandler) SerializeEdit(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
 		h.editActionMu.Lock()
 		defer h.editActionMu.Unlock()
-		if update.CallbackQuery != nil && update.CallbackQuery.Data != "ManageQueue" {
+		if update.CallbackQuery != nil && update.CallbackQuery.Data != "ManageQueue" && !strings.HasPrefix(update.CallbackQuery.Data, "ManageQueue:") {
 			q := update.CallbackQuery
 			var ok bool
 			ctx, ok = h.NormalizeMenuCallback(ctx, update)

@@ -33,13 +33,13 @@ func TestModerationSDKListsOpenRunsAcrossChatsWithStructuredSelection(t *testing
 	}
 	processTelegramUpdates(t, h, telegram, chatEditorMessage(h.developerID, 99, 0, "/manage_queue@QueueBot"))
 	request := moderationMenuRequest(t, api)
-	for _, label := range []string{"Первый чат", "Лабораторная", "Первая работа", "Чат -500", "Вторая работа", "МСК"} {
-		if !strings.Contains(request.values["reply_markup"], label) {
+	for _, label := range []string{"Первый чат", "Лабораторная", "Первая работа", "Группа: ID -500", "Вторая работа", "МСК"} {
+		if !strings.Contains(request.values["text"], label) {
 			t.Fatalf("queue selector lost %q: %+v", label, request)
 		}
 	}
 	for _, label := range []string{"Ещё не открыта", "Уже закрыта"} {
-		if strings.Contains(request.values["reply_markup"], label) {
+		if strings.Contains(request.values["text"], label) {
 			t.Fatalf("selector includes closed run %q", label)
 		}
 	}
