@@ -26,6 +26,12 @@ jobs:
       - uses: actions/setup-go@v5.5.0
         with:
           go-version: '1.25.x'
+      - name: Ensure deployment test shells are available
+        run: |
+          if ! command -v zsh >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends zsh
+          fi
       - name: Deployment and token rotation regression tests
         env:
           PYTHONDONTWRITEBYTECODE: '1'
@@ -103,6 +109,7 @@ jobs:
           envs: DEPLOY_SHA
           command_timeout: 20m
           script: |
+            exec /bin/sh <<'QUEUEBOT_DEPLOY_SCRIPT'
             set +x
             set -eu
             exec 3>&1
@@ -172,3 +179,4 @@ jobs:
             wait_for_ready queuebot 'running:false:healthy' '{{.State.Status}}:{{.State.Restarting}}:{{if .State.Health}}{{.State.Health.Status}}{{end}}'
             wait_for_ready queuebot_pgadmin 'running:false' '{{.State.Status}}:{{.State.Restarting}}'
             deploy_outcome=ready
+            QUEUEBOT_DEPLOY_SCRIPT

@@ -97,9 +97,9 @@ class DeploymentTests(unittest.TestCase):
             "FAKE_INFRA_IMAGES": "\n".join(INFRA_IMAGES),
         }
 
-    def deploy(self, **environment):
+    def deploy(self, outer_shell="/bin/sh", **environment):
         result = subprocess.run(
-            ["/bin/sh"], input=DEPLOY_SCRIPT, text=True, capture_output=True,
+            [outer_shell, "-c", DEPLOY_SCRIPT], text=True, capture_output=True,
             cwd=self.checkout, env={**self.environment, **environment}, timeout=20,
         )
         self.assertEqual(result.stderr, "")
@@ -153,6 +153,21 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("queuebot_pgadmin: running:false", self.log())
         self.assertFalse(any(call[:3] == ["docker", "compose", "ps"] for call in calls))
         self.assertFalse(any(call[:2] == ["docker", "logs"] for call in calls))
+
+    def test_outer_sh_bash_and_zsh_use_posix_splitting_and_preserve_private_failure_status(self):
+        for shell in ("sh", "bash", "zsh"):
+            with self.subTest(shell=shell):
+                result = self.deploy(outer_shell=shell, FAKE_MISSING_IMAGES=INFRA_IMAGES[-1])
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "Deployment ready.\n")
+                image_inspections = [call for call in self.calls() if call[:3] == ["docker", "image", "inspect"]]
+                self.assertEqual(image_inspections, [["docker", "image", "inspect", image] for image in INFRA_IMAGES])
+                self.assertIn(["docker", "pull", INFRA_IMAGES[-1]], self.calls())
+                (self.commands / "calls.jsonl").unlink()
+                failed = self.deploy(outer_shell=shell, FAKE_FAIL="build")
+                self.assert_failed(failed, 23)
+                self.assert_not_stopped()
+                (self.commands / "calls.jsonl").unlink()
 
     def test_config_and_build_failure_leave_running_services_untouched(self):
         for stage in ("config", "build", "config-images"):
