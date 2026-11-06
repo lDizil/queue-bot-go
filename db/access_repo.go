@@ -45,25 +45,47 @@ func (db *DBRepository) HasAdmin(ctx context.Context, id int64) (bool, error) {
 	return admin, err
 }
 
-func (db *DBRepository) ListAdminIDs(ctx context.Context) ([]int64, error) {
-	rows, err := db.pool.Query(ctx, "SELECT user_id FROM global_admins ORDER BY user_id")
+func (db *DBRepository) ListAdmins(ctx context.Context) ([]access.Admin, error) {
+	rows, err := db.pool.Query(ctx, "SELECT user_id, label FROM global_admins ORDER BY user_id")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var ids []int64
+	var admins []access.Admin
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var admin access.Admin
+		if err := rows.Scan(&admin.ID, &admin.Label); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		admins = append(admins, admin)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return ids, nil
+	return admins, nil
+}
+
+func (db *DBRepository) GetAdmin(ctx context.Context, id int64) (access.Admin, error) {
+	var admin access.Admin
+	if err := db.pool.QueryRow(ctx, "SELECT user_id, label FROM global_admins WHERE user_id = $1", id).Scan(&admin.ID, &admin.Label); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return access.Admin{}, access.ErrNotFound
+		}
+		return access.Admin{}, err
+	}
+	return admin, nil
+}
+
+func (db *DBRepository) SetAdminLabel(ctx context.Context, id int64, label string) error {
+	tag, err := db.pool.Exec(ctx, "UPDATE global_admins SET label = $2 WHERE user_id = $1", id, label)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return access.ErrNotFound
+	}
+	return nil
 }
 
 func (db *DBRepository) InsertAdmin(ctx context.Context, id int64) error {

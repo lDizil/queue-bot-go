@@ -16,7 +16,9 @@ import (
 
 type AccessControl interface {
 	Allowed(context.Context, int64, access.Permission) (bool, error)
-	ListAdmins(context.Context) ([]int64, error)
+	ListAdmins(context.Context) ([]access.Admin, error)
+	Admin(context.Context, int64) (access.Admin, error)
+	SetAdminLabel(context.Context, int64, int64, string) error
 	Permissions(context.Context, int64) (map[access.Permission]bool, error)
 	AddAdmin(context.Context, int64, int64) error
 	RemoveAdmin(context.Context, int64, int64) error
@@ -46,7 +48,7 @@ func (h *BotHandler) canEdit(ctx context.Context, userID int64) bool {
 
 func (h *BotHandler) allowedState(ctx context.Context, userID int64, state userState) bool {
 	switch state.state {
-	case "role_add", "edit_config":
+	case "role_add", "role_label", "edit_config":
 		return userID == h.developerID
 	case "add_chat", "rename_chat":
 		return h.allowed(ctx, userID, access.ManageChats)
@@ -148,22 +150,31 @@ func (h *BotHandler) rolesMenu(ctx context.Context) (string, *models.InlineKeybo
 	if h.access == nil {
 		return "", nil, errors.New("access service is not configured")
 	}
-	ids, err := h.access.ListAdmins(ctx)
+	admins, err := h.access.ListAdmins(ctx)
 	if err != nil {
 		return "", nil, err
 	}
 	var rows [][]models.InlineKeyboardButton
-	for _, id := range ids {
+	for _, admin := range admins {
+		id := admin.ID
 		if id == h.developerID {
 			continue
 		}
-		rows = append(rows, []models.InlineKeyboardButton{{Text: strconv.FormatInt(id, 10), CallbackData: fmt.Sprintf("RoleSelect:%d", id)}})
+		label := strconv.FormatInt(id, 10)
+		if admin.Label != "" {
+			label = admin.Label + " · " + label
+		}
+		rows = append(rows, []models.InlineKeyboardButton{{Text: label, CallbackData: fmt.Sprintf("RoleSelect:%d", id)}})
 	}
 	rows = append(rows, []models.InlineKeyboardButton{{Text: "Добавить администратора", CallbackData: "RoleAdd"}}, []models.InlineKeyboardButton{{Text: "Назад", CallbackData: "ConfigBack"}})
 	return "Администраторы бота\n\nВыберите администратора, чтобы настроить доступы. Разрешения действуют во всех чатах. У новых администраторов все разрешения выключены.", &models.InlineKeyboardMarkup{InlineKeyboard: rows}, nil
 }
 
 func (h *BotHandler) roleCard(ctx context.Context, target int64) (string, *models.InlineKeyboardMarkup, error) {
+	admin, err := h.access.Admin(ctx, target)
+	if err != nil {
+		return "", nil, err
+	}
 	permissions, err := h.access.Permissions(ctx, target)
 	if err != nil {
 		return "", nil, err
@@ -176,8 +187,17 @@ func (h *BotHandler) roleCard(ctx context.Context, target int64) (string, *model
 		}
 		rows = append(rows, []models.InlineKeyboardButton{{Text: permissionLabels[permission] + ": " + state, CallbackData: fmt.Sprintf("RolePerm:%d:%d:%t", target, index, !permissions[permission])}})
 	}
+	labelButton := "Изменить подпись"
+	if admin.Label == "" {
+		labelButton = "Добавить подпись"
+	}
+	rows = append(rows, []models.InlineKeyboardButton{{Text: labelButton, CallbackData: fmt.Sprintf("RoleLabel:%d", target)}})
 	rows = append(rows, []models.InlineKeyboardButton{{Text: "Снять права администратора", CallbackData: fmt.Sprintf("RoleRemove:%d", target)}}, []models.InlineKeyboardButton{{Text: "К администраторам", CallbackData: "RolesMenu"}})
-	return fmt.Sprintf("Администратор: %d\n\nНажмите на разрешение, чтобы изменить его. Изменения применяются сразу.", target), &models.InlineKeyboardMarkup{InlineKeyboard: rows}, nil
+	label := admin.Label
+	if label == "" {
+		label = "не задана"
+	}
+	return fmt.Sprintf("Администратор: %d\nПодпись: %s\n\nНажмите на разрешение, чтобы изменить его. Изменения применяются сразу.", target, label), &models.InlineKeyboardMarkup{InlineKeyboard: rows}, nil
 }
 
 func (h *BotHandler) rolesHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -193,6 +213,7 @@ func (h *BotHandler) rolesHandler(ctx context.Context, b *bot.Bot, update *model
 	var text string
 	var markup *models.InlineKeyboardMarkup
 	var err error
+	session.state = ""
 	switch parts[0] {
 	case "RolesMenu":
 		session.state = ""
@@ -214,6 +235,21 @@ func (h *BotHandler) rolesHandler(ctx context.Context, b *bot.Bot, update *model
 			return
 		}
 		session.state = ""
+	case "RoleLabel", "RoleLabelSkip", "RoleLabelClear":
+		if len(parts) != 2 || session.roleTargetID <= 0 || parts[1] != strconv.FormatInt(session.roleTargetID, 10) {
+			return
+		}
+		if parts[0] == "RoleLabel" {
+			session.state = "role_label"
+			text, markup, err = h.roleLabelPrompt(ctx, session.roleTargetID)
+		} else {
+			if parts[0] == "RoleLabelClear" {
+				err = h.access.SetAdminLabel(ctx, query.From.ID, session.roleTargetID, "")
+			}
+			if err == nil {
+				text, markup, err = h.roleCard(ctx, session.roleTargetID)
+			}
+		}
 	case "RolePerm":
 		if len(parts) != 4 || session.roleTargetID <= 0 || parts[1] != strconv.FormatInt(session.roleTargetID, 10) {
 			return
@@ -249,14 +285,26 @@ func (h *BotHandler) rolesHandler(ctx context.Context, b *bot.Bot, update *model
 		return
 	}
 	if err != nil {
+		h.stateMu.Lock()
+		current := h.userState[query.From.ID]
+		current.state = ""
+		h.userState[query.From.ID] = current
+		h.stateMu.Unlock()
 		h.answer(ctx, b, query, "Не удалось изменить доступы. Откройте список администраторов заново")
 		return
 	}
+	pending := session.state
+	session.state = ""
 	h.stateMu.Lock()
 	h.userState[query.From.ID] = session
 	h.stateMu.Unlock()
 	if err := h.editMenu(ctx, b, query.From.ID, text, markup); err != nil {
 		log.Print("Не удалось обновить меню администраторов")
+	} else if pending != "" {
+		session.state = pending
+		h.stateMu.Lock()
+		h.userState[query.From.ID] = session
+		h.stateMu.Unlock()
 	}
 	h.answer(ctx, b, query, "")
 }
@@ -266,26 +314,71 @@ func (h *BotHandler) handleRoleInput(ctx context.Context, b *bot.Bot, update *mo
 	if message.From.ID != h.developerID || h.access == nil {
 		return
 	}
-	target, err := strconv.ParseInt(strings.TrimSpace(message.Text), 10, 64)
-	if err == nil {
-		err = h.access.AddAdmin(ctx, message.From.ID, target)
-	}
-	if err != nil {
-		_ = h.editMenu(ctx, b, message.From.ID, "Не удалось добавить администратора. Введите положительный Telegram ID пользователя.", &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{{Text: "Назад", CallbackData: "RolesMenu"}}}})
+	h.stateMu.RLock()
+	session := h.userState[message.From.ID]
+	h.stateMu.RUnlock()
+	var text string
+	var markup *models.InlineKeyboardMarkup
+	var err error
+	pending := ""
+	switch session.state {
+	case "role_add":
+		var target int64
+		target, err = strconv.ParseInt(strings.TrimSpace(message.Text), 10, 64)
+		if err == nil {
+			err = h.access.AddAdmin(ctx, message.From.ID, target)
+		}
+		if err != nil {
+			_ = h.editMenu(ctx, b, message.From.ID, "Не удалось добавить администратора. Введите положительный Telegram ID пользователя.", &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{{Text: "Назад", CallbackData: "RolesMenu"}}}})
+			return
+		}
+		session.roleTargetID = target
+		pending = "role_label"
+		text, markup, err = h.roleLabelPrompt(ctx, target)
+	case "role_label":
+		err = h.access.SetAdminLabel(ctx, message.From.ID, session.roleTargetID, message.Text)
+		if err != nil {
+			text, markup, promptErr := h.roleLabelPrompt(ctx, session.roleTargetID)
+			if promptErr == nil {
+				_ = h.editMenu(ctx, b, message.From.ID, "Не удалось сохранить подпись. Используйте одну строку длиной до 100 символов.\n\n"+text, markup)
+			}
+			return
+		}
+		text, markup, err = h.roleCard(ctx, session.roleTargetID)
+	default:
 		return
 	}
-	h.stateMu.Lock()
-	session := h.userState[message.From.ID]
 	session.state = ""
-	session.roleTargetID = target
+	h.stateMu.Lock()
 	h.userState[message.From.ID] = session
 	h.stateMu.Unlock()
-	text, markup, err := h.roleCard(ctx, target)
 	if err != nil {
-		log.Print("Не удалось прочитать разрешения администратора")
+		log.Print("Не удалось прочитать карточку администратора")
 		return
 	}
 	if err := h.editMenu(ctx, b, message.From.ID, text, markup); err != nil {
 		log.Print("Не удалось обновить карточку администратора")
+		return
 	}
+	if pending != "" {
+		session.state = pending
+		h.stateMu.Lock()
+		h.userState[message.From.ID] = session
+		h.stateMu.Unlock()
+	}
+}
+
+func (h *BotHandler) roleLabelPrompt(ctx context.Context, target int64) (string, *models.InlineKeyboardMarkup, error) {
+	admin, err := h.access.Admin(ctx, target)
+	if err != nil {
+		return "", nil, err
+	}
+	text := fmt.Sprintf("Введите подпись для администратора %d одной строкой (до 100 символов). Например: Маша — староста БГГ323.\nПодпись не меняет имя в Telegram и не влияет на права.", target)
+	var rows [][]models.InlineKeyboardButton
+	if admin.Label != "" {
+		text += "\n\nСейчас: " + admin.Label
+		rows = append(rows, []models.InlineKeyboardButton{{Text: "Убрать подпись", CallbackData: fmt.Sprintf("RoleLabelClear:%d", target)}})
+	}
+	rows = append(rows, []models.InlineKeyboardButton{{Text: "Пропустить", CallbackData: fmt.Sprintf("RoleLabelSkip:%d", target)}})
+	return text, &models.InlineKeyboardMarkup{InlineKeyboard: rows}, nil
 }

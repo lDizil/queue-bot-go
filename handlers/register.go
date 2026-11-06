@@ -147,6 +147,7 @@ func (h *BotHandler) RegisterHandlers(b *bot.Bot, username string) {
 	registerCallback("ModerationSelect:", moderationHandler(h.SelectModerationQueue))
 	registerCallback("ModerationRemove:", moderationHandler(h.RemoveParticipant))
 	registerCallback("ModerationBack", moderationHandler(h.ModerationBack))
+	registerCallback("ModerationPage:", moderationHandler(h.ModerationPage))
 	registerCallback("ModerationLeave", moderationHandler(h.LeaveModeration))
 }
 

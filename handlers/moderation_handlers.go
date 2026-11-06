@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"queuebot/access"
 	"queuebot/db"
@@ -22,13 +23,70 @@ func (h *BotHandler) ManageQueue(ctx context.Context, b *bot.Bot, update *models
 	if userID == 0 || h.queues == nil {
 		return
 	}
-	snapshots, err := h.queues.OpenQueues(ctx)
-	if err != nil {
-		snapshots = nil
-	}
-	text, markup := h.moderationList(ctx, snapshots)
-	if err != nil {
-		text = "Не удалось получить открытые очереди. Откройте меню заново."
+	var (
+		snapshots []queue.Snapshot
+		selected  queue.RunReference
+		text      string
+		markup    *models.InlineKeyboardMarkup
+		page      int
+	)
+	if query := update.CallbackQuery; query != nil {
+		var ref queue.Reference
+		if query.Data == "ManageQueue" {
+			message := query.Message.Message
+			if message == nil || h.db == nil {
+				return
+			}
+			schedule, err := h.db.GetActiveScheduleByMessage(ctx, message.Chat.ID, message.ID)
+			if err != nil {
+				h.answer(ctx, b, query, queue.ErrorText(err))
+				return
+			}
+			ref = queue.Reference{ScheduleID: schedule.ID, ChatID: message.Chat.ID, MessageID: message.ID}
+		} else {
+			parts := strings.Split(query.Data, ":")
+			if len(parts) != 2 || parts[0] != "ManageQueue" {
+				h.answer(ctx, b, query, "Некорректная кнопка очереди")
+				return
+			}
+			var ok bool
+			ref, ok = h.queueReference(ctx, b, update)
+			if !ok {
+				return
+			}
+		}
+		if _, err := h.queues.Active(ctx, ref); err != nil {
+			h.answer(ctx, b, query, queue.ErrorText(err))
+			return
+		}
+		if h.chats != nil && query.Message.Message.Chat.Title != "" {
+			_ = h.chats.Remember(ctx, ref.ChatID, query.Message.Message.Chat.Title)
+		}
+		h.enrichModerationChats(ctx)
+		schedule, err := h.queues.Active(ctx, ref)
+		if err != nil {
+			h.answer(ctx, b, query, queue.ErrorText(err))
+			return
+		}
+		selected = queue.RunReference{ScheduleID: schedule.ID, ChatID: schedule.ChatID, OpensAt: *schedule.ActiveOpensAt}
+		snapshot, err := h.queues.InspectRun(ctx, selected)
+		if err != nil {
+			h.answer(ctx, b, query, queue.ErrorText(err))
+			return
+		}
+		snapshots = []queue.Snapshot{snapshot}
+		text, markup = h.moderationParticipants(ctx, snapshot)
+	} else {
+		var err error
+		h.enrichModerationChats(ctx)
+		snapshots, err = h.queues.OpenQueues(ctx)
+		if err != nil {
+			snapshots = nil
+		}
+		text, markup, page = h.moderationList(ctx, snapshots, 0)
+		if err != nil {
+			text = "Не удалось получить открытые очереди. Откройте меню заново."
+		}
 	}
 	if _, err := h.sendMenu(ctx, b, update, "moderation", text, markup); err != nil {
 		return
@@ -36,6 +94,7 @@ func (h *BotHandler) ManageQueue(ctx context.Context, b *bot.Bot, update *models
 	h.stateMu.Lock()
 	session := h.userState[userID]
 	session.moderationRuns = moderationReferences(snapshots)
+	session.moderationRun, session.moderationSelected, session.moderationPage = selected, update.CallbackQuery != nil, page
 	h.userState[userID] = session
 	h.stateMu.Unlock()
 	generation := h.MenuGeneration(userID)
@@ -56,53 +115,112 @@ func moderationReferences(snapshots []queue.Snapshot) []queue.RunReference {
 	return refs
 }
 
-func (h *BotHandler) moderationList(ctx context.Context, snapshots []queue.Snapshot) (string, *models.InlineKeyboardMarkup) {
-	var keyboard [][]models.InlineKeyboardButton
-	for _, snapshot := range snapshots {
-		schedule := snapshot.Schedule
-		if schedule.ActiveOpensAt == nil {
-			continue
+func (h *BotHandler) enrichModerationChats(ctx context.Context) {
+	if h.chats == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_, _ = h.chats.List(ctx)
+}
+
+func (h *BotHandler) moderationList(ctx context.Context, snapshots []queue.Snapshot, page int) (string, *models.InlineKeyboardMarkup, int) {
+	const (
+		pageLimit = 5
+		textLimit = 3500
+		prefix    = "Управление участниками. Выберите открытую очередь."
+	)
+	var (
+		blocks  []string
+		pages   [][]int
+		current []int
+		size    = len(utf16.Encode([]rune(prefix))) + 100
+	)
+	names := make(map[int64]string)
+	if h.db != nil {
+		if known, err := h.db.ListChats(ctx); err == nil {
+			for _, chat := range known {
+				names[chat.ID] = chat.Name
+			}
 		}
+	}
+	for index, snapshot := range snapshots {
+		block := fmt.Sprintf("№%d. %s", index+1, moderationQueueDetails(snapshot.Schedule, names[snapshot.Schedule.ChatID]))
+		blockSize := len(utf16.Encode([]rune(block))) + 2
+		if len(current) > 0 && (len(current) == pageLimit || size+blockSize > textLimit) {
+			pages = append(pages, current)
+			current = nil
+			size = len(utf16.Encode([]rune(prefix))) + 100
+		}
+		blocks = append(blocks, block)
+		current = append(current, index)
+		size += blockSize
+	}
+	if len(current) > 0 {
+		pages = append(pages, current)
+	}
+	if len(pages) == 0 {
+		return "Сейчас нет открытых очередей. Меню обновляется автоматически.", &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{{Text: "Закрыть управление", CallbackData: "ModerationLeave"}}}}, 0
+	}
+	page = max(0, min(page, len(pages)-1))
+	var keyboard [][]models.InlineKeyboardButton
+	text := prefix
+	for _, index := range pages[page] {
+		text += "\n\n" + blocks[index]
+		schedule := snapshots[index].Schedule
 		ref := queue.RunReference{ScheduleID: schedule.ID, ChatID: schedule.ChatID, OpensAt: *schedule.ActiveOpensAt}
-		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: h.moderationQueueLabel(ctx, schedule), CallbackData: moderationSelectData(ref)}})
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: fmt.Sprintf("Открыть №%d", index+1), CallbackData: moderationSelectData(ref)}})
+	}
+	if len(pages) > 1 {
+		text += fmt.Sprintf("\n\nСтраница %d из %d", page+1, len(pages))
+		var navigation []models.InlineKeyboardButton
+		if page > 0 {
+			navigation = append(navigation, models.InlineKeyboardButton{Text: "← Назад", CallbackData: fmt.Sprintf("ModerationPage:%d", page-1)})
+		}
+		if page+1 < len(pages) {
+			navigation = append(navigation, models.InlineKeyboardButton{Text: "Далее →", CallbackData: fmt.Sprintf("ModerationPage:%d", page+1)})
+		}
+		keyboard = append(keyboard, navigation)
 	}
 	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Закрыть управление", CallbackData: "ModerationLeave"}})
-	text := "Управление участниками. Выберите открытую очередь."
-	if len(snapshots) == 0 {
-		text = "Сейчас нет открытых очередей. Меню обновляется автоматически."
-	}
-	return text, &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
+	return text, &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}, page
 }
 
 func moderationSelectData(ref queue.RunReference) string {
 	return fmt.Sprintf("ModerationSelect:%d:%d", ref.ScheduleID, ref.OpensAt.UnixMicro())
 }
 
-func (h *BotHandler) moderationQueueLabel(ctx context.Context, schedule db.Schedule) string {
-	group := fmt.Sprintf("Чат %d", schedule.ChatID)
-	if h.db != nil {
-		if chat, err := h.db.GetChat(ctx, schedule.ChatID); err == nil {
-			group = chatName(chat)
-		}
+func moderationQueueDetails(schedule db.Schedule, groupName string) string {
+	group := fmt.Sprintf("ID %d", schedule.ChatID)
+	if groupName != "" {
+		group = fmt.Sprintf("%s (ID %d)", queueLabel(groupName, 400), schedule.ChatID)
 	}
 	threadID := schedule.ThreadID
 	if schedule.ActiveThreadID != nil {
 		threadID = *schedule.ActiveThreadID
 	}
-	topic := fmt.Sprintf("Тема %d", threadID)
+	topic := fmt.Sprintf("ID %d", threadID)
 	if schedule.ThreadDescription != nil && strings.TrimSpace(*schedule.ThreadDescription) != "" {
-		topic = strings.Join(strings.Fields(*schedule.ThreadDescription), " ")
+		topic = fmt.Sprintf("%s (ID %d)", queueLabel(strings.Join(strings.Fields(*schedule.ThreadDescription), " "), 1000), threadID)
 	}
-	title := strings.Join(strings.Fields(schedule.Title), " ")
-	if title == "" {
-		title = "Очередь без заголовка"
+	kind := "Очередь по расписанию"
+	if schedule.IsTemporary {
+		kind = "Разовая очередь"
 	}
-	window := ""
+	text := fmt.Sprintf("%s\nГруппа: %s\nТема: %s", kind, group, topic)
+	if title := strings.Join(strings.Fields(schedule.Title), " "); title != "" {
+		text += "\nНазвание: " + queueLabel(title, 400)
+	}
 	if schedule.ActiveOpensAt != nil && schedule.ActiveClosesAt != nil {
 		moscow := time.FixedZone("МСК", 3*60*60)
-		window = schedule.ActiveOpensAt.In(moscow).Format("02.01 15:04") + "–" + schedule.ActiveClosesAt.In(moscow).Format("15:04") + " МСК"
+		opensAt, closesAt := schedule.ActiveOpensAt.In(moscow), schedule.ActiveClosesAt.In(moscow)
+		closing := closesAt.Format("15:04")
+		if opensAt.Format("02.01.2006") != closesAt.Format("02.01.2006") {
+			closing = closesAt.Format("02.01.2006 15:04")
+		}
+		text += "\nВремя: " + opensAt.Format("02.01.2006 15:04") + "–" + closing + " МСК"
 	}
-	return fmt.Sprintf("%s · %s · %s · %s", queueLabel(group, 40), queueLabel(topic, 32), queueLabel(title, 48), window)
+	return text
 }
 
 func (h *BotHandler) SelectModerationQueue(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -148,7 +266,13 @@ func (h *BotHandler) moderationSession(ctx context.Context, update *models.Updat
 }
 
 func (h *BotHandler) moderationParticipants(ctx context.Context, snapshot queue.Snapshot) (string, *models.InlineKeyboardMarkup) {
-	text := h.moderationQueueLabel(ctx, snapshot.Schedule) + "\n\nНажмите на участника, чтобы убрать его из очереди. Повторная запись разрешена."
+	var groupName string
+	if h.db != nil {
+		if chat, err := h.db.GetChat(ctx, snapshot.Schedule.ChatID); err == nil {
+			groupName = chat.Name
+		}
+	}
+	text := moderationQueueDetails(snapshot.Schedule, groupName) + "\n\nНажмите на участника, чтобы убрать его из очереди. Повторная запись разрешена."
 	if len(snapshot.Entries) == 0 {
 		text += "\n\nОчередь пуста."
 	}
@@ -161,7 +285,7 @@ func (h *BotHandler) moderationParticipants(ctx context.Context, snapshot queue.
 	var row []models.InlineKeyboardButton
 	for _, entry := range snapshot.Entries {
 		name := strings.Join(strings.Fields(entry.DisplayName), " ")
-		if name == "" && entry.Username != "" {
+		if entry.Username != "" {
 			name = "@" + entry.Username
 		}
 		if name == "" {
@@ -218,19 +342,38 @@ func (h *BotHandler) ModerationBack(ctx context.Context, b *bot.Bot, update *mod
 	if !ok {
 		return
 	}
+	h.enrichModerationChats(ctx)
+	h.showModerationList(ctx, b, update, session, 0)
+}
+
+func (h *BotHandler) ModerationPage(ctx context.Context, b *bot.Bot, update *models.Update) {
+	session, ok := h.moderationSession(ctx, update)
+	if !ok || session.moderationSelected {
+		return
+	}
+	page, err := strconv.Atoi(strings.TrimPrefix(update.CallbackQuery.Data, "ModerationPage:"))
+	if err != nil || page < 0 {
+		h.answer(ctx, b, update.CallbackQuery, "Некорректная страница")
+		return
+	}
+	h.showModerationList(ctx, b, update, session, page)
+}
+
+func (h *BotHandler) showModerationList(ctx context.Context, b *bot.Bot, update *models.Update, session userState, page int) {
 	snapshots, err := h.queues.OpenQueues(ctx)
 	if err != nil {
 		h.answer(ctx, b, update.CallbackQuery, "Не удалось получить открытые очереди")
 		return
 	}
+	text, markup, page := h.moderationList(ctx, snapshots, page)
 	session.moderationSelected = false
 	session.moderationRun = queue.RunReference{}
 	session.moderationRuns = moderationReferences(snapshots)
+	session.moderationPage = page
 	session.enteredAt = time.Now()
 	h.stateMu.Lock()
 	h.userState[update.CallbackQuery.From.ID] = session
 	h.stateMu.Unlock()
-	text, markup := h.moderationList(ctx, snapshots)
 	_ = h.editMenu(ctx, b, update.CallbackQuery.From.ID, text, markup)
 	h.answer(ctx, b, update.CallbackQuery, "")
 }
@@ -302,11 +445,11 @@ func (h *BotHandler) refreshModerationSession(ctx context.Context, b *bot.Bot, u
 		if err != nil {
 			return lastContent, true
 		}
+		text, markup, session.moderationPage = h.moderationList(ctx, snapshots, session.moderationPage)
 		session.moderationRuns = moderationReferences(snapshots)
 		h.stateMu.Lock()
 		h.userState[userID] = session
 		h.stateMu.Unlock()
-		text, markup = h.moderationList(ctx, snapshots)
 	}
 	content := moderationContent(text, markup)
 	if content == lastContent {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -57,8 +58,9 @@ func TestDeveloperHasEveryPermissionWithoutDatabase(t *testing.T) {
 func TestAllRoleWritersEnforceDeveloperAndTargetProtection(t *testing.T) {
 	service := NewService(nil, 10)
 	writers := map[string]func(int64, int64) error{
-		"add":    func(actor, target int64) error { return service.AddAdmin(t.Context(), actor, target) },
-		"remove": func(actor, target int64) error { return service.RemoveAdmin(t.Context(), actor, target) },
+		"add":       func(actor, target int64) error { return service.AddAdmin(t.Context(), actor, target) },
+		"remove":    func(actor, target int64) error { return service.RemoveAdmin(t.Context(), actor, target) },
+		"set label": func(actor, target int64) error { return service.SetAdminLabel(t.Context(), actor, target, "Name") },
 		"set permission": func(actor, target int64) error {
 			return service.SetPermission(t.Context(), actor, target, EditSchedule, true)
 		},
@@ -139,14 +141,70 @@ func TestAdminMembershipDoesNotGrantPermissionsAndReadsStayCurrent(t *testing.T)
 }
 
 func TestListAdminsIncludesDeveloperOnceInSortedOrder(t *testing.T) {
-	stored := []int64{30, 10, 20}
-	store := &storeStub{list: func(context.Context) ([]int64, error) { return stored, nil }}
-	ids, err := NewService(store, 10).ListAdmins(t.Context())
-	if err != nil || !reflect.DeepEqual(ids, []int64{10, 20, 30}) {
-		t.Fatalf("admins=%v err=%v", ids, err)
+	stored := []Admin{{ID: 30, Label: "Third"}, {ID: 10, Label: "Ignored"}, {ID: 20, Label: "Second"}}
+	store := &storeStub{list: func(context.Context) ([]Admin, error) { return stored, nil }}
+	admins, err := NewService(store, 10).ListAdmins(t.Context())
+	if err != nil || !reflect.DeepEqual(admins, []Admin{{ID: 10}, {ID: 20, Label: "Second"}, {ID: 30, Label: "Third"}}) {
+		t.Fatalf("admins=%v err=%v", admins, err)
 	}
-	if !reflect.DeepEqual(stored, []int64{30, 10, 20}) {
+	if !reflect.DeepEqual(stored, []Admin{{ID: 30, Label: "Third"}, {ID: 10, Label: "Ignored"}, {ID: 20, Label: "Second"}}) {
 		t.Fatalf("list mutated stored state: %v", stored)
+	}
+}
+
+func TestAdminReturnsManualLabelAndPreservesMissingRole(t *testing.T) {
+	service := NewService(&storeStub{get: func(_ context.Context, id int64) (Admin, error) {
+		if id == 20 {
+			return Admin{ID: id, Label: "Иван Петров"}, nil
+		}
+		return Admin{}, ErrNotFound
+	}}, 10)
+	if admin, err := service.Admin(t.Context(), 20); err != nil || admin != (Admin{ID: 20, Label: "Иван Петров"}) {
+		t.Fatalf("admin=%+v err=%v", admin, err)
+	}
+	if admin, err := NewService(nil, 10).Admin(t.Context(), 10); err != nil || admin != (Admin{ID: 10}) {
+		t.Fatalf("developer=%+v err=%v", admin, err)
+	}
+	if admin, err := service.Admin(t.Context(), 30); admin != (Admin{}) || !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing admin=%+v err=%v", admin, err)
+	}
+	for _, id := range []int64{0, -1} {
+		if _, err := NewService(nil, 10).Admin(t.Context(), id); !errors.Is(err, ErrInvalidID) {
+			t.Fatalf("invalid ID %d: %v", id, err)
+		}
+	}
+}
+
+func TestSetAdminLabelNormalizesAndValidates(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		label string
+		want  string
+	}{
+		{"trim and collapse", "  Иван   Петров  ", "Иван Петров"},
+		{"unicode whitespace", "\u00a0Иван\u2003Петров\u00a0", "Иван Петров"},
+		{"clear", "", ""},
+		{"blank clears", "   ", ""},
+		{"100 runes", strings.Repeat("я", 100), strings.Repeat("я", 100)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stored string
+			service := NewService(&storeStub{label: func(_ context.Context, id int64, label string) error {
+				if id != 20 {
+					t.Fatalf("label target=%d", id)
+				}
+				stored = label
+				return nil
+			}}, 10)
+			if err := service.SetAdminLabel(t.Context(), 10, 20, test.label); err != nil || stored != test.want {
+				t.Fatalf("stored=%q want=%q err=%v", stored, test.want, err)
+			}
+		})
+	}
+	for _, label := range []string{strings.Repeat("я", 101), "bad\x00label", "line\nfeed", "tab\tname", "escape\x1b", "delete\x7f", "next\u0085line", string([]byte{0xff})} {
+		if err := NewService(nil, 10).SetAdminLabel(t.Context(), 10, 20, label); !errors.Is(err, ErrInvalidLabel) {
+			t.Fatalf("invalid label %q: %v", label, err)
+		}
 	}
 }
 
@@ -167,7 +225,9 @@ func TestStoreFailuresDenyAccessAndPreserveCause(t *testing.T) {
 	store := &storeStub{
 		bootstrap: func(context.Context, []int64) error { return unavailable },
 		has:       func(context.Context, int64) (bool, error) { return true, unavailable },
-		list:      func(context.Context) ([]int64, error) { return []int64{20}, unavailable },
+		list:      func(context.Context) ([]Admin, error) { return []Admin{{ID: 20, Label: "Name"}}, unavailable },
+		get:       func(context.Context, int64) (Admin, error) { return Admin{ID: 20, Label: "Name"}, unavailable },
+		label:     func(context.Context, int64, string) error { return unavailable },
 		insert:    func(context.Context, int64) error { return unavailable },
 		remove:    func(context.Context, int64) error { return unavailable },
 		permissions: func(context.Context, int64) (map[Permission]bool, error) {
@@ -182,6 +242,9 @@ func TestStoreFailuresDenyAccessAndPreserveCause(t *testing.T) {
 	if ids, err := service.ListAdmins(t.Context()); ids != nil || !errors.Is(err, unavailable) {
 		t.Fatalf("admins=%v err=%v", ids, err)
 	}
+	if admin, err := service.Admin(t.Context(), 20); admin != (Admin{}) || !errors.Is(err, unavailable) {
+		t.Fatalf("admin=%+v err=%v", admin, err)
+	}
 	if permissions, err := service.Permissions(t.Context(), 20); permissions != nil || !errors.Is(err, unavailable) {
 		t.Fatalf("permissions=%v err=%v", permissions, err)
 	}
@@ -193,6 +256,7 @@ func TestStoreFailuresDenyAccessAndPreserveCause(t *testing.T) {
 		"add":            func() error { return service.AddAdmin(t.Context(), 10, 20) },
 		"remove":         func() error { return service.RemoveAdmin(t.Context(), 10, 20) },
 		"set permission": func() error { return service.SetPermission(t.Context(), 10, 20, EditSchedule, true) },
+		"set label":      func() error { return service.SetAdminLabel(t.Context(), 10, 20, "Name") },
 	} {
 		if err := call(); !errors.Is(err, unavailable) {
 			t.Fatalf("%s lost failure cause: %v", name, err)
@@ -203,7 +267,9 @@ func TestStoreFailuresDenyAccessAndPreserveCause(t *testing.T) {
 type storeStub struct {
 	bootstrap   func(context.Context, []int64) error
 	has         func(context.Context, int64) (bool, error)
-	list        func(context.Context) ([]int64, error)
+	list        func(context.Context) ([]Admin, error)
+	get         func(context.Context, int64) (Admin, error)
+	label       func(context.Context, int64, string) error
 	insert      func(context.Context, int64) error
 	remove      func(context.Context, int64) error
 	permissions func(context.Context, int64) (map[Permission]bool, error)
@@ -215,10 +281,14 @@ var _ Store = (*storeStub)(nil)
 func (s *storeStub) BootstrapAdmins(ctx context.Context, ids []int64) error {
 	return s.bootstrap(ctx, ids)
 }
-func (s *storeStub) HasAdmin(ctx context.Context, id int64) (bool, error) { return s.has(ctx, id) }
-func (s *storeStub) ListAdminIDs(ctx context.Context) ([]int64, error)    { return s.list(ctx) }
-func (s *storeStub) InsertAdmin(ctx context.Context, id int64) error      { return s.insert(ctx, id) }
-func (s *storeStub) DeleteAdmin(ctx context.Context, id int64) error      { return s.remove(ctx, id) }
+func (s *storeStub) HasAdmin(ctx context.Context, id int64) (bool, error)  { return s.has(ctx, id) }
+func (s *storeStub) ListAdmins(ctx context.Context) ([]Admin, error)       { return s.list(ctx) }
+func (s *storeStub) GetAdmin(ctx context.Context, id int64) (Admin, error) { return s.get(ctx, id) }
+func (s *storeStub) SetAdminLabel(ctx context.Context, id int64, label string) error {
+	return s.label(ctx, id, label)
+}
+func (s *storeStub) InsertAdmin(ctx context.Context, id int64) error { return s.insert(ctx, id) }
+func (s *storeStub) DeleteAdmin(ctx context.Context, id int64) error { return s.remove(ctx, id) }
 func (s *storeStub) LoadAdminPermissions(ctx context.Context, id int64) (map[Permission]bool, error) {
 	return s.permissions(ctx, id)
 }

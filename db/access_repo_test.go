@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,13 +16,13 @@ import (
 )
 
 func TestAccessBootstrapPreservesRoleRemovalAndRevokedPermissionsAfterRestart(t *testing.T) {
-	repo, _ := newChatTestRepository(t, 10)
+	repo, _ := newChatTestRepository(t, 12)
 	ctx := t.Context()
 	service := access.NewService(repo, 10)
 	if err := service.Initialize(ctx, []int64{20, 10, 30, 20}); err != nil {
 		t.Fatal(err)
 	}
-	if stored, err := repo.ListAdminIDs(ctx); err != nil || !reflect.DeepEqual(stored, []int64{20, 30}) {
+	if stored, err := repo.ListAdmins(ctx); err != nil || !reflect.DeepEqual(stored, []access.Admin{{ID: 20}, {ID: 30}}) {
 		t.Fatalf("developer entered mutable role storage: admins=%v err=%v", stored, err)
 	}
 	for _, id := range []int64{10, 20, 30} {
@@ -37,7 +38,7 @@ func TestAccessBootstrapPreservesRoleRemovalAndRevokedPermissionsAfterRestart(t 
 	if err := restarted.Initialize(ctx, []int64{20, 30, 40}); err != nil {
 		t.Fatal(err)
 	}
-	if ids, err := restarted.ListAdmins(ctx); err != nil || !reflect.DeepEqual(ids, []int64{10, 30}) {
+	if ids, err := restarted.ListAdmins(ctx); err != nil || !reflect.DeepEqual(ids, []access.Admin{{ID: 10}, {ID: 30}}) {
 		t.Fatalf("restart restored obsolete environment roles: admins=%v err=%v", ids, err)
 	}
 	retained := slices.DeleteFunc(access.AllPermissions(), func(permission access.Permission) bool { return permission == access.EditSchedule })
@@ -53,7 +54,7 @@ func TestAccessBootstrapPreservesRoleRemovalAndRevokedPermissionsAfterRestart(t 
 }
 
 func TestAccessAdminPermissionLifecycleAndWriterProtection(t *testing.T) {
-	repo, _ := newChatTestRepository(t, 10)
+	repo, _ := newChatTestRepository(t, 12)
 	ctx := t.Context()
 	service := access.NewService(repo, 10)
 	if err := service.Initialize(ctx, nil); err != nil {
@@ -116,7 +117,7 @@ func TestAccessAdminPermissionLifecycleAndWriterProtection(t *testing.T) {
 }
 
 func TestAccessConcurrentBootstrapImportsOneCompleteLegacySet(t *testing.T) {
-	repo, _ := newChatTestRepository(t, 10)
+	repo, _ := newChatTestRepository(t, 12)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	var (
@@ -141,13 +142,13 @@ func TestAccessConcurrentBootstrapImportsOneCompleteLegacySet(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ids, err := repo.ListAdminIDs(ctx)
-	if err != nil || (!reflect.DeepEqual(ids, groups[0]) && !reflect.DeepEqual(ids, groups[1])) {
+	ids, err := repo.ListAdmins(ctx)
+	if err != nil || (!reflect.DeepEqual(ids, []access.Admin{{ID: 100}, {ID: 101}}) && !reflect.DeepEqual(ids, []access.Admin{{ID: 200}, {ID: 201}, {ID: 202}})) {
 		t.Fatalf("concurrent bootstrap mixed legacy snapshots: admins=%v err=%v", ids, err)
 	}
 	service := access.NewService(repo, 10)
-	for _, id := range ids {
-		assertAccessPermissions(t, service, id, access.AllPermissions())
+	for _, admin := range ids {
+		assertAccessPermissions(t, service, admin.ID, access.AllPermissions())
 	}
 	var markerCount int
 	if err := repo.pool.QueryRow(ctx, "SELECT count(*) FROM access_bootstrap").Scan(&markerCount); err != nil || markerCount != 1 {
@@ -156,27 +157,27 @@ func TestAccessConcurrentBootstrapImportsOneCompleteLegacySet(t *testing.T) {
 }
 
 func TestAccessFailedBootstrapRollsBackMarkerAndRoles(t *testing.T) {
-	repo, _ := newChatTestRepository(t, 10)
+	repo, _ := newChatTestRepository(t, 12)
 	ctx := t.Context()
 	var constraint *pgconn.PgError
 	if err := repo.BootstrapAdmins(ctx, []int64{20, -1}); !errors.As(err, &constraint) || constraint.Code != "23514" {
 		t.Fatalf("invalid ID bypassed database constraint: %v", err)
 	}
-	if ids, err := repo.ListAdminIDs(ctx); err != nil || len(ids) != 0 {
+	if ids, err := repo.ListAdmins(ctx); err != nil || len(ids) != 0 {
 		t.Fatalf("failed bootstrap partially stored roles: ids=%v err=%v", ids, err)
 	}
 	service := access.NewService(repo, 10)
 	if err := service.Initialize(ctx, []int64{30}); err != nil {
 		t.Fatal(err)
 	}
-	if ids, err := repo.ListAdminIDs(ctx); err != nil || !reflect.DeepEqual(ids, []int64{30}) {
+	if ids, err := repo.ListAdmins(ctx); err != nil || !reflect.DeepEqual(ids, []access.Admin{{ID: 30}}) {
 		t.Fatalf("failed bootstrap persisted its marker: ids=%v err=%v", ids, err)
 	}
 	assertAccessPermissions(t, service, 30, access.AllPermissions())
 }
 
 func TestAccessPermissionWritesRaceSafelyWithRoleRemoval(t *testing.T) {
-	repo, _ := newChatTestRepository(t, 10)
+	repo, _ := newChatTestRepository(t, 12)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	service := access.NewService(repo, 10)
@@ -218,6 +219,103 @@ func TestAccessPermissionWritesRaceSafelyWithRoleRemoval(t *testing.T) {
 	}
 	if err := service.AddAdmin(ctx, 10, 20); err != nil {
 		t.Fatal(err)
+	}
+	assertAccessPermissions(t, service, 20, nil)
+}
+
+func TestAccessLabelMigrationPreservesRolesPermissionsAndBootstrap(t *testing.T) {
+	repo, migration := newChatTestRepository(t, 11)
+	ctx := t.Context()
+	service := access.NewService(repo, 10)
+	if err := service.Initialize(ctx, []int64{20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetPermission(ctx, 10, 20, access.EditSchedule, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := migration.Migrate(12); err != nil {
+		t.Fatal(err)
+	}
+	if admin, err := service.Admin(ctx, 20); err != nil || admin != (access.Admin{ID: 20}) {
+		t.Fatalf("existing admin default label=%+v err=%v", admin, err)
+	}
+	retained := slices.DeleteFunc(access.AllPermissions(), func(permission access.Permission) bool { return permission == access.EditSchedule })
+	assertAccessPermissions(t, service, 20, retained)
+	if err := service.SetAdminLabel(ctx, 10, 20, "Before rollback"); err != nil {
+		t.Fatal(err)
+	}
+	var constraint *pgconn.PgError
+	if err := repo.SetAdminLabel(ctx, 20, strings.Repeat("я", 101)); !errors.As(err, &constraint) || constraint.Code != "23514" {
+		t.Fatalf("label bypassed database length constraint: %v", err)
+	}
+	if err := migration.Steps(-1); err != nil {
+		t.Fatal(err)
+	}
+	assertAccessPermissions(t, service, 20, retained)
+	if err := migration.Migrate(12); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Initialize(ctx, []int64{30}); err != nil {
+		t.Fatal(err)
+	}
+	if admins, err := repo.ListAdmins(ctx); err != nil || !reflect.DeepEqual(admins, []access.Admin{{ID: 20}}) {
+		t.Fatalf("migration changed roles or bootstrap marker: admins=%+v err=%v", admins, err)
+	}
+	assertAccessPermissions(t, service, 20, retained)
+}
+
+func TestAccessLabelsPersistWithoutChangingPermissionsOrRestoringDeletedAdmins(t *testing.T) {
+	repo, _ := newChatTestRepository(t, 12)
+	ctx := t.Context()
+	service := access.NewService(repo, 10)
+	if err := service.Initialize(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AddAdmin(ctx, 10, 20); err != nil {
+		t.Fatal(err)
+	}
+	if admin, err := service.Admin(ctx, 20); err != nil || admin != (access.Admin{ID: 20}) {
+		t.Fatalf("new admin default label=%+v err=%v", admin, err)
+	}
+	if err := service.SetPermission(ctx, 10, 20, access.EditSchedule, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"Иван Петров", "Дежурный", ""} {
+		if err := service.SetAdminLabel(ctx, 10, 20, label); err != nil {
+			t.Fatal(err)
+		}
+		restarted := access.NewService(NewDBRepo(repo.pool), 10)
+		if err := restarted.Initialize(ctx, []int64{20, 30}); err != nil {
+			t.Fatal(err)
+		}
+		if admins, err := restarted.ListAdmins(ctx); err != nil || !reflect.DeepEqual(admins, []access.Admin{{ID: 10}, {ID: 20, Label: label}}) {
+			t.Fatalf("label did not survive restart: admins=%+v err=%v", admins, err)
+		}
+		if admin, err := restarted.Admin(ctx, 20); err != nil || admin != (access.Admin{ID: 20, Label: label}) {
+			t.Fatalf("label read=%+v err=%v", admin, err)
+		}
+		assertAccessPermissions(t, restarted, 20, []access.Permission{access.EditSchedule})
+		if err := restarted.SetAdminLabel(ctx, 20, 20, "Self rename"); !errors.Is(err, access.ErrForbidden) {
+			t.Fatalf("admin could rename own role: %v", err)
+		}
+		if admin, err := service.Admin(ctx, 20); err != nil || admin.Label != label {
+			t.Fatalf("unauthorized rename changed label: admin=%+v err=%v", admin, err)
+		}
+	}
+	if err := service.RemoveAdmin(ctx, 10, 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetAdminLabel(ctx, 10, 20, "Stale edit"); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("deleted target rename=%v", err)
+	}
+	if admin, err := service.Admin(ctx, 20); admin != (access.Admin{}) || !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("deleted admin resurrected: admin=%+v err=%v", admin, err)
+	}
+	if err := service.AddAdmin(ctx, 10, 20); err != nil {
+		t.Fatal(err)
+	}
+	if admin, err := service.Admin(ctx, 20); err != nil || admin.Label != "" {
+		t.Fatalf("readded role retained stale label: admin=%+v err=%v", admin, err)
 	}
 	assertAccessPermissions(t, service, 20, nil)
 }

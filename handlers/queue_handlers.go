@@ -138,7 +138,7 @@ func (h *BotHandler) renderQueue(snapshot queue.Snapshot) (string, *models.Inlin
 		[]models.InlineKeyboardButton{{Text: "Занять ближайшее свободное место", CallbackData: fmt.Sprintf("JoinFirstFreeslot:%d", schedule.ID)}},
 		[]models.InlineKeyboardButton{{Text: "Сдал", CallbackData: fmt.Sprintf("CompleteSelf:%d", schedule.ID)}, {Text: "Выйти из очереди", CallbackData: fmt.Sprintf("LeaveFromQueue:%d", schedule.ID)}},
 		[]models.InlineKeyboardButton{{Text: "Отправить очередь повторно", CallbackData: fmt.Sprintf("SendQueueAgain:%d", schedule.ID)}},
-		[]models.InlineKeyboardButton{{Text: "Управление участниками", CallbackData: "ManageQueue"}})
+		[]models.InlineKeyboardButton{{Text: "Управление участниками", CallbackData: fmt.Sprintf("ManageQueue:%d", schedule.ID)}})
 	switch snapshot.Status {
 	case u.QueueOpen:
 		builder.WriteString("\n\n🟢 Очередь открыта 🟢")
