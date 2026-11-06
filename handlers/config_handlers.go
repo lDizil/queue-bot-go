@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"queuebot/access"
 	"queuebot/settings"
 	"queuebot/utils"
 
@@ -41,55 +42,16 @@ func (h *BotHandler) EditConfigReplyText(ctx context.Context, b *bot.Bot, update
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
 
-	var (
-		source = update.Message
-		userID = source.From.ID
-		chatID = source.Chat.ID
-	)
-	h.editMu.Lock()
-	oldMessageID := h.editMessages[userID]
-	oldChatID := h.editMessageChats[userID]
-	delete(h.editMessages, userID)
-	delete(h.editMessageChats, userID)
-	h.editMu.Unlock()
-	h.stateMu.Lock()
-	delete(h.userState, userID)
-	h.stateMu.Unlock()
-	if oldMessageID != 0 {
-		if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: oldChatID, MessageID: oldMessageID}); err != nil {
-			log.Println("Не удалось удалить предыдущее меню редактирования")
-		}
-	}
-
 	text, markup := configMenu(h.settings.Values(), "")
-	message, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:          chatID,
-		MessageThreadID: source.MessageThreadID,
-		Text:            text,
-		ReplyMarkup:     markup,
-	})
-	if err != nil {
+	if _, err := h.sendMenu(ctx, b, update, "config", text, markup); err != nil {
 		log.Println("Не удалось отправить меню настройки бота")
-		return
 	}
-	h.editMu.Lock()
-	h.editMessages[userID] = message.ID
-	h.editMessageChats[userID] = chatID
-	h.editMu.Unlock()
-	h.stateMu.Lock()
-	h.userState[userID] = userState{
-		menu:      "config",
-		enteredAt: time.Now(),
-		chatID:    chatID,
-		threadID:  source.MessageThreadID,
-	}
-	h.stateMu.Unlock()
 }
 
 func (h *BotHandler) EditConfigField(ctx context.Context, b *bot.Bot, update *models.Update) {
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
-	query, message, session, ok := h.settingsCallback(update, "config", true)
+	query, _, session, ok := h.settingsCallback(ctx, update, "config", true)
 	if !ok {
 		return
 	}
@@ -107,7 +69,7 @@ func (h *BotHandler) EditConfigField(ctx context.Context, b *bot.Bot, update *mo
 	h.stateMu.Unlock()
 
 	text := configPrompt(h.settings.Values(), field, "")
-	h.editConfigText(ctx, b, message.Chat.ID, message.ID, text, configBackMarkup())
+	h.editConfigMenu(ctx, b, query.From.ID, text, configBackMarkup())
 	answerSettingsCallback(ctx, b, query.ID, "")
 }
 
@@ -127,7 +89,7 @@ func (h *BotHandler) HandleConfigInput(ctx context.Context, b *bot.Bot, update *
 		return
 	}
 	h.editMu.RLock()
-	messageID, hasMessage := h.editMessages[userID]
+	_, hasMessage := h.editMessages[userID]
 	menuChatID := h.editMessageChats[userID]
 	h.editMu.RUnlock()
 	if !hasMessage || menuChatID != message.Chat.ID {
@@ -154,7 +116,7 @@ func (h *BotHandler) HandleConfigInput(ctx context.Context, b *bot.Bot, update *
 		} else {
 			log.Println("Не удалось сохранить настройки бота")
 		}
-		h.editConfigText(ctx, b, message.Chat.ID, messageID, configPrompt(h.settings.Values(), field, text), configBackMarkup())
+		h.editConfigMenu(ctx, b, userID, configPrompt(h.settings.Values(), field, text), configBackMarkup())
 		return
 	}
 	session.state = ""
@@ -172,7 +134,7 @@ func (h *BotHandler) HandleConfigInput(ctx context.Context, b *bot.Bot, update *
 		}
 	}
 	text, markup := configMenu(h.settings.Values(), status)
-	h.editConfigText(ctx, b, message.Chat.ID, messageID, text, markup)
+	h.editConfigMenu(ctx, b, userID, text, markup)
 }
 
 var errInvalidConfigInput = errors.New("invalid configuration input")
@@ -224,7 +186,7 @@ func changeConfigValue(values *settings.Values, key, input string) error {
 func (h *BotHandler) ConfigBack(ctx context.Context, b *bot.Bot, update *models.Update) {
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
-	query, message, session, ok := h.settingsCallback(update, "config", true)
+	query, _, session, ok := h.settingsCallback(ctx, update, "config", true)
 	if !ok {
 		return
 	}
@@ -235,33 +197,28 @@ func (h *BotHandler) ConfigBack(ctx context.Context, b *bot.Bot, update *models.
 	h.userState[query.From.ID] = session
 	h.stateMu.Unlock()
 	text, markup := configMenu(h.settings.Values(), "")
-	h.editConfigText(ctx, b, message.Chat.ID, message.ID, text, markup)
+	h.editConfigMenu(ctx, b, query.From.ID, text, markup)
 	answerSettingsCallback(ctx, b, query.ID, "")
 }
 
 func (h *BotHandler) LeaveEditConfig(ctx context.Context, b *bot.Bot, update *models.Update) {
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
-	query, message, _, ok := h.settingsCallback(update, "config", true)
+	query, _, _, ok := h.settingsCallback(ctx, update, "config", true)
 	if !ok {
 		return
 	}
-	h.stateMu.Lock()
-	delete(h.userState, query.From.ID)
-	h.stateMu.Unlock()
-	h.editMu.Lock()
-	delete(h.editMessages, query.From.ID)
-	delete(h.editMessageChats, query.From.ID)
-	h.editMu.Unlock()
-	h.editConfigText(ctx, b, message.Chat.ID, message.ID, "Настройка бота завершена", nil)
+	if err := h.closeMenu(ctx, b, query.From.ID); err != nil {
+		log.Println("Не удалось удалить меню настройки; повторим удаление")
+	}
 	answerSettingsCallback(ctx, b, query.ID, "")
 }
 
 func (h *BotHandler) ToggleCurrentWeek(ctx context.Context, b *bot.Bot, update *models.Update) {
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
-	query, message, session, ok := h.settingsCallback(update, "schedule", false)
-	if !ok || !h.adminIDs[query.From.ID] {
+	query, message, session, ok := h.settingsCallback(ctx, update, "schedule", false)
+	if !ok || !h.allowed(ctx, query.From.ID, access.ChangeWeek) {
 		return
 	}
 	parts := strings.Split(query.Data, ":")
@@ -320,32 +277,21 @@ func configWeekMonday(now time.Time) time.Time {
 	return midnight.AddDate(0, 0, -offset)
 }
 
-func (h *BotHandler) settingsCallback(update *models.Update, menu string, developerOnly bool) (*models.CallbackQuery, *models.Message, userState, bool) {
+func (h *BotHandler) settingsCallback(ctx context.Context, update *models.Update, menu string, developerOnly bool) (*models.CallbackQuery, *models.Message, userState, bool) {
 	if update == nil || update.CallbackQuery == nil || update.CallbackQuery.Message.Message == nil || h.settings == nil {
 		return nil, nil, userState{}, false
 	}
-	var (
-		query   = update.CallbackQuery
-		message = query.Message.Message
-		userID  = query.From.ID
-	)
-	if developerOnly && userID != h.developerID {
+	query := update.CallbackQuery
+	if developerOnly && query.From.ID != h.developerID {
 		return nil, nil, userState{}, false
 	}
 	h.stateMu.RLock()
-	session, exists := h.userState[userID]
+	session, exists := h.userState[query.From.ID]
 	h.stateMu.RUnlock()
-	if !exists || session.menu != menu || session.chatID != message.Chat.ID || session.threadID != message.MessageThreadID || time.Since(session.enteredAt) > h.settings.Values().TimeForExpiredEditSes {
+	if !exists || session.menu != menu || !h.menuCallbackMatches(ctx, update) {
 		return nil, nil, userState{}, false
 	}
-	h.editMu.RLock()
-	messageID := h.editMessages[userID]
-	chatID := h.editMessageChats[userID]
-	h.editMu.RUnlock()
-	if messageID != message.ID || chatID != message.Chat.ID {
-		return nil, nil, userState{}, false
-	}
-	return query, message, session, true
+	return query, query.Message.Message, session, true
 }
 
 func configMenu(values settings.Values, status string) (string, *models.InlineKeyboardMarkup) {
@@ -360,6 +306,7 @@ func configMenu(values settings.Values, status string) (string, *models.InlineKe
 			CallbackData: "EditConfig:" + field.key,
 		}})
 	}
+	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Администраторы", CallbackData: "RolesMenu"}})
 	keyboard = append(keyboard, []models.InlineKeyboardButton{{Text: "Завершить настройку", CallbackData: "ConfigLeave"}})
 	return text, &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}
 }
@@ -431,5 +378,11 @@ func (h *BotHandler) editConfigText(ctx context.Context, b *bot.Bot, chatID int6
 func answerSettingsCallback(ctx context.Context, b *bot.Bot, callbackID, text string) {
 	if _, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: callbackID, Text: text}); err != nil {
 		log.Println("Не удалось подтвердить нажатие в меню настройки бота")
+	}
+}
+
+func (h *BotHandler) editConfigMenu(ctx context.Context, b *bot.Bot, userID int64, text string, markup *models.InlineKeyboardMarkup) {
+	if err := h.editMenu(ctx, b, userID, text, markup); err != nil {
+		log.Println("Не удалось обновить меню настройки бота")
 	}
 }

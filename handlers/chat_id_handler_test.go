@@ -15,7 +15,7 @@ import (
 	"github.com/go-telegram/bot"
 )
 
-func TestChatIDCommandIsPublicQualifiedAndKeepsSourceTopic(t *testing.T) {
+func TestChatIDCommandIsAdminQualifiedAndKeepsSourceTopic(t *testing.T) {
 	for _, source := range []struct {
 		name   string
 		chat   int64
@@ -23,13 +23,13 @@ func TestChatIDCommandIsPublicQualifiedAndKeepsSourceTopic(t *testing.T) {
 	}{{"group topic", -100, 7}, {"private chat", 88, 0}} {
 		t.Run(source.name, func(t *testing.T) {
 			h, telegram, api, _ := newTelegramAdapter(t)
-			update := chatEditorMessage(456, source.chat, source.thread, "/chat_id@QueueBot")
+			update := chatEditorMessage(123, source.chat, source.thread, "/chat_id@QueueBot")
 			update.Message.Chat.Title = "Do not expose the title"
 			update.Message.From.Username = "DoNotExposeUsername"
 			processTelegramUpdates(t, h, telegram, update,
-				chatEditorMessage(456, source.chat, source.thread, "/start"),
-				chatEditorMessage(456, source.chat, source.thread, "/chat_id@OtherBot"),
-				chatEditorMessage(456, source.chat, source.thread, "/chat_id_extra"))
+				chatEditorMessage(123, source.chat, source.thread, "/start"),
+				chatEditorMessage(123, source.chat, source.thread, "/chat_id@OtherBot"),
+				chatEditorMessage(123, source.chat, source.thread, "/chat_id_extra"))
 			requests := api.history()
 			if len(requests) != 2 || requests[0].method != "sendMessage" || requests[1].method != "sendMessage" {
 				t.Fatalf("routing changed or cleanup blocked the next command: %+v", requests)
@@ -160,7 +160,7 @@ func TestChatIDCleanupCancelsPendingTimerAndInflightRequest(t *testing.T) {
 func TestChatIDSendFailureDoesNotStartCleanup(t *testing.T) {
 	h, telegram, api, _ := newTelegramAdapter(t)
 	api.fail("sendMessage", http.StatusServiceUnavailable, "Service unavailable")
-	processTelegramUpdates(t, h, telegram, chatEditorMessage(456, -100, 7, "/chat_id"))
+	processTelegramUpdates(t, h, telegram, chatEditorMessage(123, -100, 7, "/chat_id"))
 	if requests := api.history(); len(requests) != 1 || requests[0].method != "sendMessage" {
 		t.Fatalf("failed reply scheduled unrelated actions: %+v", requests)
 	}

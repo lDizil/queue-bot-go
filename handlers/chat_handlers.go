@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"queuebot/access"
 	"queuebot/chats"
 	"queuebot/db"
 
@@ -20,7 +21,7 @@ func (h *BotHandler) SetChatService(service *chats.Service) {
 	h.chats = service
 }
 
-func (h *BotHandler) chatListMenu(ctx context.Context, page int) (string, *models.InlineKeyboardMarkup, error) {
+func (h *BotHandler) chatListMenu(ctx context.Context, page int, userID int64) (string, *models.InlineKeyboardMarkup, error) {
 	if h.chats == nil {
 		return "", nil, errors.New("chat service is not configured")
 	}
@@ -59,7 +60,7 @@ func (h *BotHandler) chatListMenu(ctx context.Context, page int) (string, *model
 	if len(registered) == 0 {
 		text += "\n\nПока нет добавленных чатов. Добавьте группу, в которой уже находится бот."
 	}
-	return text, &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}, nil
+	return text, h.filterEditorMarkup(ctx, userID, &models.InlineKeyboardMarkup{InlineKeyboard: keyboard}), nil
 }
 
 func chatName(chat chats.Chat) string {
@@ -87,7 +88,7 @@ func (h *BotHandler) selectedChatMenu(ctx context.Context, userID int64) (string
 		session.state, session.scheduleID, session.targetChatID, session.chatSelected = "", 0, 0, false
 		h.userState[userID] = session
 		h.stateMu.Unlock()
-		return h.chatListMenu(ctx, 0)
+		return h.chatListMenu(ctx, 0, userID)
 	}
 	if err != nil {
 		return "", nil, err
@@ -101,7 +102,7 @@ func (h *BotHandler) chatScheduleMenu(ctx context.Context, userID int64, chat ch
 		return "", nil, err
 	}
 	text, markup := h.GenerateEditMessage(chat, schedules, userID == h.developerID)
-	return text, markup, nil
+	return text, h.filterEditorMarkup(ctx, userID, markup), nil
 }
 
 func (h *BotHandler) selectedSchedule(ctx context.Context, userID int64, scheduleID int) (db.Schedule, error) {
@@ -133,7 +134,7 @@ func (h *BotHandler) ShowChatList(ctx context.Context, b *bot.Bot, update *model
 	session.state, session.scheduleID, session.targetChatID, session.chatSelected = "", 0, 0, false
 	h.userState[userID] = session
 	h.stateMu.Unlock()
-	text, markup, err := h.chatListMenu(ctx, page)
+	text, markup, err := h.chatListMenu(ctx, page, userID)
 	if err != nil {
 		h.answer(ctx, b, query, "Не удалось получить список чатов. Повторите попытку")
 		return
@@ -274,4 +275,35 @@ func (h *BotHandler) commandTarget(ctx context.Context, sourceChatID int64) (int
 		return 0, chats.ErrDefaultNotSet
 	}
 	return h.chats.ResolveTarget(ctx, sourceChatID)
+}
+
+func (h *BotHandler) filterEditorMarkup(ctx context.Context, userID int64, markup *models.InlineKeyboardMarkup) *models.InlineKeyboardMarkup {
+	edit := h.allowed(ctx, userID, access.EditSchedule)
+	chats := h.allowed(ctx, userID, access.ManageChats)
+	week := h.allowed(ctx, userID, access.ChangeWeek)
+	var rows [][]models.InlineKeyboardButton
+	for _, row := range markup.InlineKeyboard {
+		var buttons []models.InlineKeyboardButton
+		for _, button := range row {
+			prefix, _, _ := strings.Cut(button.CallbackData, ":")
+			allowed := true
+			switch prefix {
+			case "AddChat", "RenameChat":
+				allowed = chats
+			case "SetCurrentWeek":
+				allowed = week
+			case "EditSchedule", "AddNewSchedule":
+				allowed = edit
+			case "SetDefaultChat":
+				allowed = userID == h.developerID
+			}
+			if allowed {
+				buttons = append(buttons, button)
+			}
+		}
+		if len(buttons) > 0 {
+			rows = append(rows, buttons)
+		}
+	}
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }

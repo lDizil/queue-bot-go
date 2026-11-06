@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"queuebot/access"
 	"queuebot/db"
 	"queuebot/queue"
 	"queuebot/settings"
@@ -80,7 +81,7 @@ func TestServiceCompletionChecksOwnershipAndDeduplicatesCallbacks(t *testing.T) 
 			t.Fatalf("repeated callback undid completion: completed=%t err=%v", completed, err)
 		}
 	}
-	administrator := queue.Actor{ID: 999, Admin: true}
+	administrator := queue.Actor{ID: 999}
 	if completed, err := fixture.service.Complete(fixture.ctx, ref, administrator, bob.ID, bob.Position, nil, "admin-mark"); err != nil || !completed {
 		t.Fatalf("administrator could not mark Bob: completed=%t err=%v", completed, err)
 	}
@@ -102,7 +103,7 @@ func TestServiceSwapKeepsCompletionWithPersonAndRejectsOldPlaceButton(t *testing
 	if err := fixture.service.Swap(fixture.ctx, ref, alice.ID, bob.ID, 1, 2); err != nil {
 		t.Fatal(err)
 	}
-	administrator := queue.Actor{ID: 999, Admin: true}
+	administrator := queue.Actor{ID: 999}
 	if _, err := fixture.service.Complete(fixture.ctx, ref, administrator, alice.ID, 1, nil, "old-place-button"); !errors.Is(err, queue.ErrChanged) {
 		t.Fatalf("old place button was accepted after swap: %v", err)
 	}
@@ -128,7 +129,7 @@ func TestServiceLeaveAndRejoinInvalidatesPreviousSwapAndCompletion(t *testing.T)
 	if err := fixture.service.Swap(fixture.ctx, ref, oldAlice.ID, bob.ID, 1, 2); !errors.Is(err, db.ErrQueueStateChanged) {
 		t.Fatalf("old swap remained valid after rejoin: %v", err)
 	}
-	administrator := queue.Actor{ID: 999, Admin: true}
+	administrator := queue.Actor{ID: 999}
 	if _, err := fixture.service.Complete(fixture.ctx, ref, administrator, oldAlice.ID, 1, nil, "old-entry"); !errors.Is(err, queue.ErrChanged) {
 		t.Fatalf("old completion button remained valid after rejoin: %v", err)
 	}
@@ -485,6 +486,7 @@ func newServiceFixture(t *testing.T) *serviceFixture {
 	messenger := newHTTPMessenger(t)
 	observed := &observedStore{DBRepository: repository, reads: make(chan int, 64)}
 	service := queue.NewService(ctx, observed, manager, messenger)
+	service.SetAuthorizer(testPermissions(func(id int64, _ access.Permission) (bool, error) { return id == 999, nil }))
 	t.Cleanup(service.Stop)
 	return &serviceFixture{ctx: ctx, repository: repository, observed: observed, settings: manager, messenger: messenger, service: service}
 }

@@ -7,8 +7,8 @@ import (
 	"log"
 	"strings"
 
+	"queuebot/access"
 	"queuebot/dispatch"
-	"queuebot/middleware"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -30,10 +30,11 @@ func (h *BotHandler) NewTelegramBot(token string, options ...bot.Option) (*bot.B
 }
 
 func (h *BotHandler) Shutdown(ctx context.Context) error {
-	if h.dispatcher == nil {
-		return nil
+	var err error
+	if h.dispatcher != nil {
+		err = h.dispatcher.Shutdown(ctx)
 	}
-	return h.dispatcher.Shutdown(ctx)
+	return errors.Join(err, h.ShutdownMenuCleanup(ctx))
 }
 
 func (h *BotHandler) dispatchUpdates(next bot.HandlerFunc) bot.HandlerFunc {
@@ -41,8 +42,13 @@ func (h *BotHandler) dispatchUpdates(next bot.HandlerFunc) bot.HandlerFunc {
 		if update == nil {
 			return
 		}
-		if err := h.dispatcher.Submit(ctx, updateKey(update), func(executionCtx context.Context) {
-			next(executionCtx, b, update)
+		snapshot := *update
+		if update.CallbackQuery != nil {
+			query := *update.CallbackQuery
+			snapshot.CallbackQuery = &query
+		}
+		if err := h.dispatcher.Submit(ctx, updateKey(&snapshot), func(executionCtx context.Context) {
+			next(executionCtx, b, &snapshot)
 		}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, dispatch.ErrClosed) {
 			log.Printf("enqueue Telegram update: %v", err)
 		}
@@ -78,19 +84,10 @@ func updateKey(update *models.Update) string {
 }
 
 func (h *BotHandler) RegisterHandlers(b *bot.Bot, username string) {
-	var adminIDs []int64
-	for id := range h.adminIDs {
-		adminIDs = append(adminIDs, id)
-	}
-	adminOnly := middleware.AdminOnly(adminIDs)
-	developerOnly := middleware.AdminOnly([]int64{h.developerID})
-	editSession := middleware.EditSession(h)
-	adminHandler := func(next bot.HandlerFunc) bot.HandlerFunc { return middleware.Chain(next, adminOnly) }
-	editHandler := func(next bot.HandlerFunc) bot.HandlerFunc {
-		return middleware.Chain(h.SerializeEdit(next), adminOnly, editSession)
-	}
-	configHandler := func(next bot.HandlerFunc) bot.HandlerFunc {
-		return middleware.Chain(h.SerializeEdit(next), developerOnly, editSession)
+	editHandler := func(next bot.HandlerFunc) bot.HandlerFunc { return h.SerializeEdit(h.requireEditor(next)) }
+	configHandler := func(next bot.HandlerFunc) bot.HandlerFunc { return h.requireDeveloper(true, h.SerializeEdit(next)) }
+	moderationHandler := func(next bot.HandlerFunc) bot.HandlerFunc {
+		return h.SerializeEdit(h.requirePermission(access.RemoveParticipants, true, next))
 	}
 	registerCommand := func(name string, handler bot.HandlerFunc) {
 		b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
@@ -98,22 +95,25 @@ func (h *BotHandler) RegisterHandlers(b *bot.Bot, username string) {
 		}, handler)
 	}
 	registerCallback := func(name string, handler bot.HandlerFunc) {
-		b.RegisterHandler(bot.HandlerTypeCallbackQueryData, name, bot.MatchTypePrefix, handler)
+		b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
+			return update != nil && update.CallbackQuery != nil && strings.HasPrefix(menuCallbackData(update.CallbackQuery.Data), name)
+		}, handler)
 	}
 	registerCommand("start", h.StartHandler)
-	registerCommand("chat_id", h.chatIDHandler)
+	registerCommand("chat_id", h.requirePermission(access.ViewChatID, true, h.chatIDHandler))
 	registerCommand("swap", h.SwapRequest)
-	registerCommand("one_shot_queue", adminHandler(h.RunOneShotQueue))
-	registerCommand("queue", adminHandler(h.RecoverQueue))
-	registerCommand("edit_schedule", adminHandler(h.SerializeEdit(h.EditScheduleReplyText)))
-	registerCommand("edit_config", middleware.Chain(h.SerializeEdit(h.EditConfigReplyText), developerOnly))
+	registerCommand("manage_queue", moderationHandler(h.ManageQueue))
+	registerCommand("one_shot_queue", h.requirePermission(access.CreateOneShot, false, h.RunOneShotQueue))
+	registerCommand("queue", h.requirePermission(access.ManageQueueMessages, false, h.RecoverQueue))
+	registerCommand("edit_schedule", h.SerializeEdit(h.requireEditor(h.EditScheduleReplyText)))
+	registerCommand("edit_config", h.requireDeveloper(false, h.SerializeEdit(h.EditConfigReplyText)))
 	registerCallback("Join:", h.JoinToPosition)
 	registerCallback("JoinBusySlot:", h.JoinBusySlot)
 	registerCallback("JoinFirstFreeslot:", h.JoinClosestFreeSlot)
 	registerCallback("LeaveFromQueue:", h.LeaveQueue)
 	registerCallback("CompleteSelf:", h.CompleteQueue)
 	registerCallback("CompleteSlot:", h.CompleteQueue)
-	registerCallback("SendQueueAgain:", adminHandler(h.SendQueueAgain))
+	registerCallback("SendQueueAgain:", h.requirePermission(access.ManageQueueMessages, false, h.SendQueueAgain))
 	registerCallback("SwapConfirm:", h.SwapConfirm)
 	registerCallback("SwapReject:", h.SwapReject)
 	registerCallback("ActualQueue", h.ActualQueueInfo)
@@ -123,7 +123,7 @@ func (h *BotHandler) RegisterHandlers(b *bot.Bot, username string) {
 	registerCallback("SelectChat:", editHandler(h.SelectChat))
 	registerCallback("AddChat", editHandler(h.AddChat))
 	registerCallback("RenameChat:", editHandler(h.RenameChat))
-	registerCallback("SetDefaultChat:", middleware.Chain(h.SerializeEdit(h.SetDefaultChat), developerOnly, editSession))
+	registerCallback("SetDefaultChat:", h.requireDeveloper(true, h.SerializeEdit(h.SetDefaultChat)))
 	registerCallback("AddNewSchedule:", editHandler(h.AddNewSchedule))
 	registerCallback("LeaveEditSchedule", editHandler(h.LeaveEditSchedule))
 	registerCallback("Back:", editHandler(h.Back))
@@ -141,6 +141,13 @@ func (h *BotHandler) RegisterHandlers(b *bot.Bot, username string) {
 	registerCallback("EditConfig:", configHandler(h.EditConfigField))
 	registerCallback("ConfigBack", configHandler(h.ConfigBack))
 	registerCallback("ConfigLeave", configHandler(h.LeaveEditConfig))
+	registerCallback("RolesMenu", configHandler(h.rolesHandler))
+	registerCallback("Role", configHandler(h.rolesHandler))
+	registerCallback("ManageQueue", moderationHandler(h.ManageQueue))
+	registerCallback("ModerationSelect:", moderationHandler(h.SelectModerationQueue))
+	registerCallback("ModerationRemove:", moderationHandler(h.RemoveParticipant))
+	registerCallback("ModerationBack", moderationHandler(h.ModerationBack))
+	registerCallback("ModerationLeave", moderationHandler(h.LeaveModeration))
 }
 
 func commandMatches(text, name, username string) bool {

@@ -76,7 +76,7 @@ func TestChatMigrationAndBootstrapPreserveLegacyRunsAndParticipants(t *testing.T
 			}
 		}
 	}
-	if err := migration.Up(); err != nil {
+	if err := migration.Migrate(9); err != nil {
 		t.Fatal(err)
 	}
 	assertRunsPreserved()
@@ -120,7 +120,7 @@ func TestChatMigrationAndBootstrapPreserveLegacyRunsAndParticipants(t *testing.T
 		t.Fatal(err)
 	}
 	assertRunsPreserved()
-	if err := migration.Up(); err != nil {
+	if err := migration.Migrate(9); err != nil {
 		t.Fatal(err)
 	}
 	assertRunsPreserved()
@@ -133,7 +133,7 @@ func TestLegacyEnvironmentDefaultWinsOverOneKnownSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := migration.Up(); err != nil {
+	if err := migration.Migrate(9); err != nil {
 		t.Fatal(err)
 	}
 	service := chats.NewService(repo, nil)
@@ -194,7 +194,7 @@ func TestChatMigrationPreservesPositiveLegacyDestination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := migration.Up(); err != nil {
+	if err := migration.Migrate(9); err != nil {
 		t.Fatal(err)
 	}
 	service := chats.NewService(repo, nil)
