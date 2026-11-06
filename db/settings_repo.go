@@ -20,7 +20,7 @@ func (db *DBRepository) LoadSettings(ctx context.Context) (settings.Values, bool
 		}
 		return settings.Values{}, false, err
 	}
-	var values settings.Values
+	values := settings.Values{ModerationBlockDuration: settings.Defaults().ModerationBlockDuration}
 	if err := json.Unmarshal(data, &values); err != nil {
 		return values, false, err
 	}

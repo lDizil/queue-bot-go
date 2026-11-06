@@ -26,25 +26,26 @@ type Config struct {
 }
 
 var environmentKeys = map[string][]string{
-	"bot_token":                {"BOT_TOKEN"},
-	"bot_chat_id":              {"BOT_CHAT_ID"},
-	"authorized_user_id":       {"AUTHORIZED_USER_ID"},
-	"developer_user_id":        {"DEVELOPER_USER_ID"},
-	"db_user":                  {"DB_USER"},
-	"db_password":              {"DB_PASSWORD"},
-	"db_name":                  {"DB_NAME"},
-	"db_port":                  {"DB_PORT"},
-	"db_host":                  {"DB_HOST"},
-	"total_slots_in_queue":     {"TOTAL_SLOTS_IN_QUEUE"},
-	"amount_of_buttons_in_row": {"AMOUNT_OF_BUTTONS_IN_ROW"},
-	"delay_update_queue":       {"DELAY_UPDATE_QUEUE", "DELAY_QUEUE"},
-	"edit_session_timeout":     {"EDIT_SESSION_TIMEOUT", "EXIRED_SES_TIME"},
-	"week1_date":               {"WEEK1_DATE"},
-	"week1_type":               {"WEEK1_TYPE"},
-	"scheduler_tick_interval":  {"SCHEDULER_TICK_INTERVAL"},
-	"one_shot_delay":           {"ONE_SHOT_DELAY"},
-	"one_shot_duration":        {"ONE_SHOT_DURATION"},
-	"update_workers":           {"UPDATE_WORKERS"},
+	"bot_token":                 {"BOT_TOKEN"},
+	"bot_chat_id":               {"BOT_CHAT_ID"},
+	"authorized_user_id":        {"AUTHORIZED_USER_ID"},
+	"developer_user_id":         {"DEVELOPER_USER_ID"},
+	"db_user":                   {"DB_USER"},
+	"db_password":               {"DB_PASSWORD"},
+	"db_name":                   {"DB_NAME"},
+	"db_port":                   {"DB_PORT"},
+	"db_host":                   {"DB_HOST"},
+	"total_slots_in_queue":      {"TOTAL_SLOTS_IN_QUEUE"},
+	"amount_of_buttons_in_row":  {"AMOUNT_OF_BUTTONS_IN_ROW"},
+	"delay_update_queue":        {"DELAY_UPDATE_QUEUE", "DELAY_QUEUE"},
+	"edit_session_timeout":      {"EDIT_SESSION_TIMEOUT", "EXIRED_SES_TIME"},
+	"week1_date":                {"WEEK1_DATE"},
+	"week1_type":                {"WEEK1_TYPE"},
+	"scheduler_tick_interval":   {"SCHEDULER_TICK_INTERVAL"},
+	"one_shot_delay":            {"ONE_SHOT_DELAY"},
+	"one_shot_duration":         {"ONE_SHOT_DURATION"},
+	"moderation_block_duration": {"MODERATION_BLOCK_DURATION"},
+	"update_workers":            {"UPDATE_WORKERS"},
 }
 
 func Load() (Config, error) {
@@ -109,6 +110,7 @@ func setDefaults(values *viper.Viper) {
 	values.SetDefault("one_shot_delay", defaults.OneShotDelay)
 	values.SetDefault("one_shot_duration", defaults.OneShotDuration)
 	values.SetDefault("update_workers", defaults.UpdateWorkers)
+	values.SetDefault("moderation_block_duration", defaults.ModerationBlockDuration)
 }
 
 func mergeLegacyEnvironment(values *viper.Viper) error {

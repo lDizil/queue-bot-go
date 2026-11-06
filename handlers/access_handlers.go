@@ -76,8 +76,15 @@ func (h *BotHandler) deny(ctx context.Context, b *bot.Bot, update *models.Update
 	if silent {
 		text = ""
 	}
-	if update.CallbackQuery != nil {
-		h.answer(ctx, b, update.CallbackQuery, text)
+	if query := update.CallbackQuery; query != nil {
+		data := menuCallbackData(query.Data)
+		if data == "ManageQueue" || strings.HasPrefix(data, "ManageQueue:") {
+			if _, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: query.ID, Text: "У вас нет доступа к управлению участниками", ShowAlert: true}); err != nil {
+				log.Print("Не удалось показать уведомление о доступе к управлению участниками")
+			}
+			return
+		}
+		h.answer(ctx, b, query, text)
 		return
 	}
 	if !silent && update.Message != nil {

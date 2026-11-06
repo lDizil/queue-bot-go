@@ -28,6 +28,9 @@ func TestValidateRejectsUnsafeSettings(t *testing.T) {
 		{"busy ticker", func(v *Values) { v.SchedulerTickInterval = time.Nanosecond }},
 		{"no opening delay", func(v *Values) { v.OneShotDelay = 0 }},
 		{"no queue duration", func(v *Values) { v.OneShotDuration = 0 }},
+		{"no moderation block", func(v *Values) { v.ModerationBlockDuration = 0 }},
+		{"short moderation block", func(v *Values) { v.ModerationBlockDuration = time.Second - time.Nanosecond }},
+		{"excessive moderation block", func(v *Values) { v.ModerationBlockDuration = 24*time.Hour + time.Nanosecond }},
 		{"no workers", func(v *Values) { v.UpdateWorkers = 0 }},
 		{"too many workers", func(v *Values) { v.UpdateWorkers = 33 }},
 	}

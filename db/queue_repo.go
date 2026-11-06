@@ -54,6 +54,9 @@ func (db *DBRepository) JoinQueue(ctx context.Context, entry QueueEntry) error {
 	if exists {
 		return pgx.ErrNoRows
 	}
+	if err := checkQueueRejoin(ctx, tx, entry.ScheduleID, entry.UserID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO queue_entries (user_id, username, display_name, schedule_id, position, completed)
   VALUES ($1, $2, $3, $4, $5, $6)`, entry.UserID, entry.Username, entry.DisplayName, entry.ScheduleID, entry.Position, entry.Completed); err != nil {
 		return err
@@ -162,6 +165,9 @@ func (db *DBRepository) JoinFirstFreeSlotWithName(ctx context.Context, userID in
 	}
 	defer tx.Rollback(ctx)
 	if err := lockQueue(ctx, tx, scheduleID); err != nil {
+		return -1, err
+	}
+	if err := checkQueueRejoin(ctx, tx, scheduleID, userID); err != nil {
 		return -1, err
 	}
 	var position int

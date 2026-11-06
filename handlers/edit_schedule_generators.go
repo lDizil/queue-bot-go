@@ -47,9 +47,6 @@ func (h *BotHandler) GenerateEditMessage(chat chats.Chat, schedules []db.Schedul
 		builder.WriteString("\nНет записей для редактирования")
 	} else {
 		for _, sch := range schedules {
-			if sch.Title != "" {
-				builder.WriteString(sch.Title + "\n")
-			}
 			var btn models.InlineKeyboardButton
 			if sch.ThreadDescription == nil {
 				btn = models.InlineKeyboardButton{

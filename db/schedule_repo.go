@@ -200,6 +200,9 @@ func (db *DBRepository) setQueueRun(ctx context.Context, scheduleID int, opensAt
 		if _, err := tx.Exec(ctx, "DELETE FROM queue_entries WHERE schedule_id = $1", scheduleID); err != nil {
 			return Schedule{}, err
 		}
+		if _, err := tx.Exec(ctx, "DELETE FROM queue_rejoin_blocks WHERE schedule_id = $1", scheduleID); err != nil {
+			return Schedule{}, err
+		}
 	}
 	schedule, err = scanSchedule(tx.QueryRow(ctx,
 		`UPDATE schedules SET active_opens_at = $2, active_closes_at = $3, active_thread_id = thread_id,
@@ -225,6 +228,9 @@ func (db *DBRepository) FinishQueueRun(ctx context.Context, scheduleID int) erro
 		return err
 	}
 	if _, err := tx.Exec(ctx, "DELETE FROM queue_entries WHERE schedule_id = $1", scheduleID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM queue_rejoin_blocks WHERE schedule_id = $1", scheduleID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, "DELETE FROM schedules WHERE id = $1 AND is_temporary", scheduleID); err != nil {

@@ -114,7 +114,7 @@ func (s *Service) activeRun(ctx context.Context, ref RunReference, state *queueS
 	return schedule, nil
 }
 
-func (s *Service) Remove(ctx context.Context, ref RunReference, actorID int64, entryID int) error {
+func (s *Service) Remove(ctx context.Context, ref RunReference, actorID int64, entryID int, blockFor time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	state := s.state(ref.ScheduleID)
@@ -129,7 +129,10 @@ func (s *Service) Remove(ctx context.Context, ref RunReference, actorID int64, e
 	if entryID <= 0 {
 		return ErrChanged
 	}
-	if err := s.store.RemoveQueueEntry(ctx, ref.ScheduleID, ref.OpensAt, entryID); err != nil {
+	if blockFor < 0 || blockFor > 24*time.Hour {
+		return ErrBlockDuration
+	}
+	if err := s.store.RemoveQueueEntry(ctx, ref.ScheduleID, ref.OpensAt, entryID, blockFor); err != nil {
 		state.uncertain = true
 		s.scheduleUpdate(state, ref.ScheduleID, s.settings.Values().DelayUpdateQueue)
 		if errors.Is(err, db.ErrQueueStateChanged) {
@@ -138,5 +141,45 @@ func (s *Service) Remove(ctx context.Context, ref RunReference, actorID int64, e
 		return err
 	}
 	s.scheduleUpdate(state, ref.ScheduleID, s.settings.Values().DelayUpdateQueue)
+	return nil
+}
+
+func (s *Service) Blocks(ctx context.Context, ref RunReference, actorID int64) ([]db.QueueBlock, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	state := s.state(ref.ScheduleID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if _, err := s.activeRun(ctx, ref, state); err != nil {
+		return nil, err
+	}
+	if err := s.authorize(ctx, actorID, access.RemoveParticipants); err != nil {
+		return nil, err
+	}
+	return s.store.ListQueueBlocks(ctx, ref.ScheduleID, ref.OpensAt)
+}
+
+func (s *Service) Unblock(ctx context.Context, ref RunReference, actorID int64, blockID int) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	state := s.state(ref.ScheduleID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if _, err := s.activeRun(ctx, ref, state); err != nil {
+		return err
+	}
+	if err := s.authorize(ctx, actorID, access.RemoveParticipants); err != nil {
+		return err
+	}
+	if blockID <= 0 {
+		return ErrBlockChanged
+	}
+	if err := s.store.UnblockQueueEntry(ctx, ref.ScheduleID, ref.OpensAt, blockID); err != nil {
+		state.uncertain = true
+		if errors.Is(err, db.ErrQueueStateChanged) {
+			return ErrBlockChanged
+		}
+		return err
+	}
 	return nil
 }

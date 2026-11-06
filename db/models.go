@@ -33,3 +33,11 @@ type QueueEntry struct {
 	Position    int
 	Completed   bool
 }
+
+type QueueBlock struct {
+	ID           int
+	UserID       int64
+	Username     string
+	DisplayName  string
+	BlockedUntil time.Time
+}
