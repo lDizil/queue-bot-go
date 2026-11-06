@@ -119,18 +119,18 @@ func TestTelegramQueueAdapterPropagatesFailuresAndAcceptsUnchangedMessage(t *tes
 
 func TestTelegramRegistrationRoutesQualifiedDeveloperConfigAndPersistsInput(t *testing.T) {
 	handler, telegram, api, store := newTelegramAdapter(t)
-	processTelegramUpdates(t, handler, telegram, &models.Update{Message: adapterMessage(handler.developerID, "/edit_config@QueueBot")})
+	processTelegramUpdates(t, handler, telegram, &models.Update{Message: privateAdapterMessage(handler.developerID, "/edit_config@QueueBot")})
 	requests := api.history()
 	if len(requests) != 1 || requests[0].method != "sendMessage" || !strings.Contains(requests[0].values["text"], "Настройки бота") {
 		t.Fatalf("qualified developer command did not open settings: %+v", requests)
 	}
-	queryMessage := adapterMessage(handler.developerID, "")
+	queryMessage := privateAdapterMessage(handler.developerID, "")
 	queryMessage.ID = 1001
 	processTelegramUpdates(t, handler, telegram, &models.Update{CallbackQuery: &models.CallbackQuery{
 		ID: "select-slots", From: models.User{ID: handler.developerID}, Data: "EditConfig:total_slots_in_queue",
 		Message: models.MaybeInaccessibleMessage{Message: queryMessage},
 	}})
-	processTelegramUpdates(t, handler, telegram, &models.Update{Message: adapterMessage(handler.developerID, "31")})
+	processTelegramUpdates(t, handler, telegram, &models.Update{Message: privateAdapterMessage(handler.developerID, "31")})
 	if handler.settings.Values().TotalSlotsInQueue != 31 || store.saves != 1 {
 		t.Fatalf("routed field input was not persisted: slots=%d saves=%d", handler.settings.Values().TotalSlotsInQueue, store.saves)
 	}
@@ -195,7 +195,7 @@ func newTelegramAdapter(t *testing.T) (*BotHandler, *bot.Bot, *telegramAdapterAP
 		t.Fatal(err)
 	}
 	const developerID = int64(789915524)
-	handler := NewBotHandler(t.Context(), nil, manager, developerID, []int64{123})
+	handler := NewBotHandler(t.Context(), nil, manager, developerID, &testAccessControl{admins: map[int64]bool{123: true}})
 	server := httptest.NewServer(http.HandlerFunc(api.serveHTTP))
 	t.Cleanup(server.Close)
 	telegram, err := handler.NewTelegramBot("1:adapter", bot.WithSkipGetMe(),
@@ -261,7 +261,16 @@ func (api *telegramAdapterAPI) serveHTTP(writer http.ResponseWriter, request *ht
 		}
 		chatID, _ := strconv.ParseInt(values["chat_id"], 10, 64)
 		threadID, _ := strconv.Atoi(values["message_thread_id"])
-		body["result"] = map[string]any{"message_id": messageID, "chat": map[string]any{"id": chatID}, "message_thread_id": threadID}
+		result := map[string]any{"message_id": messageID, "chat": map[string]any{"id": chatID}, "message_thread_id": threadID}
+		if values["ephemeral_message_parameters"] != "" {
+			ephemeralID := messageID
+			if method == "editEphemeralMessageText" {
+				ephemeralID, _ = strconv.Atoi(values["ephemeral_message_id"])
+			}
+			result["message_id"] = 0
+			result["ephemeral_message_id"] = ephemeralID
+		}
+		body["result"] = result
 	}
 	api.mu.Unlock()
 	writer.Header().Set("Content-Type", "application/json")

@@ -133,10 +133,7 @@ func TestRenderQueueMessage_SlotButtons(t *testing.T) {
 	slotBtns := 0
 	for _, row := range markup.InlineKeyboard {
 		for _, btn := range row {
-			if !strings.Contains(btn.Text, "Занять") &&
-				!strings.Contains(btn.Text, "Выйти") &&
-				!strings.Contains(btn.Text, "Сдал") &&
-				!strings.Contains(btn.Text, "Отправить") {
+			if strings.HasPrefix(btn.CallbackData, "Join:") || strings.HasPrefix(btn.CallbackData, "CompleteSlot:") {
 				slotBtns++
 			}
 		}

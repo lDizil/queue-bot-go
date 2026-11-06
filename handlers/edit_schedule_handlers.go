@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"log"
+	"queuebot/access"
 	"queuebot/db"
 	"strconv"
 	"strings"
@@ -59,45 +60,22 @@ func (h *BotHandler) Back(ctx context.Context, b *bot.Bot, update *models.Update
 
 func (h *BotHandler) EditScheduleReplyText(ctx context.Context, b *bot.Bot, update *models.Update) {
 	msg := update.Message
-	userID := msg.From.ID
-	chatID := msg.Chat.ID
-	h.stateMu.Lock()
-	delete(h.userState, userID)
-	h.stateMu.Unlock()
-	h.editMu.Lock()
-	oldMessageID := h.editMessages[userID]
-	oldChatID := h.editMessageChats[userID]
-	delete(h.editMessages, userID)
-	delete(h.editMessageChats, userID)
-	h.editMu.Unlock()
-	if oldMessageID != 0 {
-		if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: oldChatID, MessageID: oldMessageID}); err != nil {
-			log.Printf("delete previous schedule menu: %v", err)
+	if err := h.closeMenu(ctx, b, msg.From.ID); err != nil {
+		log.Print("Не удалось удалить предыдущее меню")
+	}
+	if h.chats != nil && msg.Chat.ID < 0 && h.allowed(ctx, msg.From.ID, access.ManageChats) {
+		if err := h.chats.Remember(ctx, msg.Chat.ID, msg.Chat.Title); err != nil {
+			log.Print("Не удалось сохранить название чата")
 		}
 	}
-	if h.chats != nil && chatID < 0 {
-		if err := h.chats.Remember(ctx, chatID, msg.Chat.Title); err != nil {
-			log.Printf("remember schedule chat: %v", err)
-		}
-	}
-	text, markup, err := h.chatListMenu(ctx, 0)
+	text, markup, err := h.chatListMenu(ctx, 0, msg.From.ID)
 	if err != nil {
-		log.Printf("read schedule chats: %v", err)
-		h.sendSwapInfoMessage(ctx, b, chatID, msg.MessageThreadID, "Не удалось получить список чатов. Повторите /edit_schedule")
+		h.sendSwapInfoMessage(ctx, b, msg.Chat.ID, msg.MessageThreadID, "Не удалось получить список чатов. Повторите /edit_schedule")
 		return
 	}
-	message, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, MessageThreadID: msg.MessageThreadID, Text: text, ReplyMarkup: markup})
-	if err != nil {
-		log.Printf("send schedule chat menu: %v", err)
-		return
+	if _, err := h.sendMenu(ctx, b, update, "schedule", text, markup); err != nil {
+		log.Print("Не удалось открыть меню расписания")
 	}
-	h.editMu.Lock()
-	h.editMessages[userID] = message.ID
-	h.editMessageChats[userID] = chatID
-	h.editMu.Unlock()
-	h.stateMu.Lock()
-	h.userState[userID] = userState{menu: "schedule", enteredAt: time.Now(), chatID: chatID, threadID: msg.MessageThreadID}
-	h.stateMu.Unlock()
 }
 
 func (h *BotHandler) EditScheduleEntry(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -140,32 +118,10 @@ func (h *BotHandler) EditScheduleEntry(ctx context.Context, b *bot.Bot, update *
 }
 
 func (h *BotHandler) LeaveEditSchedule(ctx context.Context, b *bot.Bot, update *models.Update) {
-	query, _, chatID, userID, username := h.getAllReplyInfo(update)
-
-	h.editMu.RLock()
-	editMesID, _ := h.editMessages[userID]
-	h.editMu.RUnlock()
-
-	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    chatID,
-		MessageID: editMesID,
-		Text:      "Сессия редактирования завершена",
-	})
-
-	if err != nil {
-		msg := fmt.Sprintf("Ошибка при выходе из редактирования очереди (пользователь %s). %v", username, err)
-		h.handleError(ctx, b, query.ID, msg)
-		return
+	if err := h.closeMenu(ctx, b, update.CallbackQuery.From.ID); err != nil {
+		log.Print("Не удалось удалить меню расписания")
 	}
-
-	h.editMu.Lock()
-	delete(h.editMessages, userID)
-	delete(h.editMessageChats, userID)
-	h.editMu.Unlock()
-
-	h.stateMu.Lock()
-	delete(h.userState, userID)
-	h.stateMu.Unlock()
+	h.answer(ctx, b, update.CallbackQuery, "")
 }
 
 func (h *BotHandler) AddNewSchedule(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -320,40 +276,14 @@ func (h *BotHandler) HandleScheduleInput(ctx context.Context, b *bot.Bot, update
 		log.Println("Ошибка перепланирования, scheduler не был задан и передан в структуру")
 	}
 
-	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    chatID,
-		MessageID: editMesID,
-		Text:      "Новая запись успешно добавлена в расписание.\nИнтерфейс для редактирования повторно отправлен в чат.",
-	})
-
-	if err != nil {
-		log.Printf("Ошибка редактирования сообщения со старым интерфейсом редактирования (пользователь %s). %v", username, err)
-		return
-	}
-
 	text, markup, err := h.selectedChatMenu(ctx, userID)
 	if err != nil {
-		log.Printf("read selected schedule chat (user %s): %v", username, err)
+		log.Print("Не удалось получить расписание после сохранения")
 		return
 	}
-
-	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:          chatID,
-		Text:            text,
-		ReplyMarkup:     markup,
-		MessageThreadID: curState.threadID,
-	})
-
-	if err != nil {
-		log.Printf("Ошибка при попытке повторно отправить сообщения для редактирования расписания (пользователь %s). %v", username, err)
-		return
+	if err := h.editMenu(ctx, b, userID, text, markup); err != nil {
+		log.Print("Не удалось обновить меню после сохранения записи")
 	}
-
-	h.editMu.Lock()
-	h.editMessages[userID] = msg.ID
-	h.editMu.Unlock()
-
-	log.Printf("Сообщение для редактирования очереди (id: %d) повторно отправлено в чат", msg.ID)
 }
 
 func (h *BotHandler) DeleteScheduleEntry(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -486,44 +416,16 @@ func (h *BotHandler) HandleNewTime(ctx context.Context, b *bot.Bot, update *mode
 		return
 	}
 
-	text, markup := h.GenerateEditScheduleMenu(sch)
-
-	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    chatID,
-		MessageID: editMesID,
-		Text:      "Выбранное время успешно изменено.\nИнтерфейс для редактирования повторно отправлен в чат.",
-	})
-
-	if err != nil {
-		log.Printf("Ошибка изменения сообщения со старым меню редактирования (пользователь %s). %v", username, err)
-		text := "Ошибка изменения сообщения со старым меню редактирования. Повторите попытку или обратитесь к модерации"
-		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditTime)
-		return
-	}
-
-	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:          chatID,
-		Text:            text,
-		ReplyMarkup:     markup,
-		MessageThreadID: curState.threadID,
-	})
-
-	if err != nil {
-		log.Println("Ошибка при отправке нового меню редактирования записи: ", err)
-		text := "Ошибка при отправке нового меню редактирования записи. Повторите попытку или обратитесь к модерации"
-		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditTime)
-		return
-	}
-
-	h.editMu.Lock()
-	h.editMessages[userID] = msg.ID
-	h.editMu.Unlock()
-
 	h.stateMu.Lock()
 	session := h.userState[userID]
 	session.state = ""
+	session.scheduleID = 0
 	h.userState[userID] = session
 	h.stateMu.Unlock()
+	text, markup := h.GenerateEditScheduleMenu(sch)
+	if err := h.editMenu(ctx, b, userID, text, markup); err != nil {
+		log.Print("Не удалось обновить меню после сохранения записи")
+	}
 }
 
 func (h *BotHandler) HandleNewThreadID(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -577,44 +479,16 @@ func (h *BotHandler) HandleNewThreadID(ctx context.Context, b *bot.Bot, update *
 		log.Printf("reschedule edited topic: %v", err)
 	}
 
-	text, markup := h.GenerateEditScheduleMenu(sch)
-
-	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    chatID,
-		MessageID: editMesID,
-		Text:      "Айди темы чата успешно изменено.\nИнтерфейс для редактирования повторно отправлен в чат.",
-	})
-
-	if err != nil {
-		log.Printf("Ошибка изменения сообщения со старым меню редактирования (пользователь %s). %v", username, err)
-		text := "Ошибка изменения сообщения со старым меню редактирования. Повторите попытку или обратитесь к модерации"
-		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditSch)
-		return
-	}
-
-	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:          chatID,
-		Text:            text,
-		ReplyMarkup:     markup,
-		MessageThreadID: curState.threadID,
-	})
-
-	if err != nil {
-		log.Println("Ошибка при отправке нового меню редактирования записи: ", err)
-		text := "Ошибка при отправке нового меню редактирования записи. Повторите попытку или обратитесь к модерации"
-		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditSch)
-		return
-	}
-
-	h.editMu.Lock()
-	h.editMessages[userID] = msg.ID
-	h.editMu.Unlock()
-
 	h.stateMu.Lock()
 	session := h.userState[userID]
 	session.state = ""
+	session.scheduleID = 0
 	h.userState[userID] = session
 	h.stateMu.Unlock()
+	text, markup := h.GenerateEditScheduleMenu(sch)
+	if err := h.editMenu(ctx, b, userID, text, markup); err != nil {
+		log.Print("Не удалось обновить меню после сохранения записи")
+	}
 }
 
 func (h *BotHandler) HandleNewDescription(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -660,42 +534,14 @@ func (h *BotHandler) HandleNewDescription(ctx context.Context, b *bot.Bot, updat
 		return
 	}
 
-	text, markup := h.GenerateEditScheduleMenu(sch)
-
-	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    chatID,
-		MessageID: editMesID,
-		Text:      "Описание записи успешно изменено.\nИнтерфейс для редактирования повторно отправлен в чат.",
-	})
-
-	if err != nil {
-		log.Printf("Ошибка изменения сообщения со старым меню редактирования (пользователь %s). %v", username, err)
-		text := "Ошибка изменения сообщения со старым меню редактирования. Повторите попытку или обратитесь к модерации"
-		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditSch)
-		return
-	}
-
-	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:          chatID,
-		Text:            text,
-		ReplyMarkup:     markup,
-		MessageThreadID: curState.threadID,
-	})
-
-	if err != nil {
-		log.Println("Ошибка при отправке нового меню редактирования записи: ", err)
-		text := "Ошибка при отправке нового меню редактирования записи. Повторите попытку или обратитесь к модерации"
-		h.EditMesWithError(ctx, b, chatID, editMesID, text, backBtnEditSch)
-		return
-	}
-
-	h.editMu.Lock()
-	h.editMessages[userID] = msg.ID
-	h.editMu.Unlock()
-
 	h.stateMu.Lock()
 	session := h.userState[userID]
 	session.state = ""
+	session.scheduleID = 0
 	h.userState[userID] = session
 	h.stateMu.Unlock()
+	text, markup := h.GenerateEditScheduleMenu(sch)
+	if err := h.editMenu(ctx, b, userID, text, markup); err != nil {
+		log.Print("Не удалось обновить меню после сохранения записи")
+	}
 }

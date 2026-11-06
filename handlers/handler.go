@@ -34,12 +34,18 @@ type BotHandler struct {
 	settings     *settings.Manager
 	queues       *queue.Service
 	developerID  int64
-	adminIDs     map[int64]bool
+	access       AccessControl
 	chats        *chats.Service
 	ctx          context.Context
 
 	totalSlotsInQueue  int
 	amountOfSlotsInRow int
+
+	menusMu          sync.Mutex
+	menus            map[int64]menuSession
+	menuCleanup      map[string]db.MenuCleanup
+	menuWorkerCancel context.CancelFunc
+	menuWorkerDone   chan struct{}
 
 	b *bot.Bot
 
@@ -82,18 +88,22 @@ func (h *BotHandler) SetBot(b *bot.Bot) {
 }
 
 type userState struct {
-	state        string
-	scheduleID   int
-	enteredAt    time.Time
-	chatID       int64
-	threadID     int
-	menu         string
-	configKey    string
-	targetChatID int64
-	chatSelected bool
+	state              string
+	scheduleID         int
+	enteredAt          time.Time
+	chatID             int64
+	threadID           int
+	menu               string
+	configKey          string
+	targetChatID       int64
+	chatSelected       bool
+	moderationRuns     []queue.RunReference
+	moderationRun      queue.RunReference
+	moderationSelected bool
+	roleTargetID       int64
 }
 
-func NewBotHandler(ctx context.Context, database *db.DBRepository, cfg *settings.Manager, developerID int64, adminIDs []int64) *BotHandler {
+func NewBotHandler(ctx context.Context, database *db.DBRepository, cfg *settings.Manager, developerID int64, permissions AccessControl) *BotHandler {
 	values := cfg.Values()
 	h := &BotHandler{
 		db:                 database,
@@ -105,13 +115,9 @@ func NewBotHandler(ctx context.Context, database *db.DBRepository, cfg *settings
 		amountOfSlotsInRow: values.AmountOfButtonsInRow,
 		settings:           cfg,
 		developerID:        developerID,
-		adminIDs:           make(map[int64]bool),
+		access:             permissions,
 		ctx:                ctx,
 	}
-	for _, id := range adminIDs {
-		h.adminIDs[id] = true
-	}
-	h.adminIDs[developerID] = true
 	return h
 }
 
@@ -143,7 +149,7 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 	if curState.chatID != update.Message.Chat.ID || curState.threadID != update.Message.MessageThreadID || time.Since(curState.enteredAt) > h.settings.Values().TimeForExpiredEditSes {
 		return
 	}
-	if !h.adminIDs[userID] {
+	if !h.allowedState(ctx, userID, curState) {
 		return
 	}
 	h.stateMu.Lock()
@@ -163,6 +169,8 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 	}
 
 	switch curState.state {
+	case "role_add":
+		h.handleRoleInput(ctx, b, update)
 	case "add_chat", "rename_chat":
 		h.HandleChatInput(ctx, b, update)
 	case "awaiting_schedule":
@@ -199,15 +207,20 @@ func (h *BotHandler) getAllReplyInfo(update *models.Update) (*models.CallbackQue
 
 func (h *BotHandler) SetQueueService(service *queue.Service) {
 	h.queues = service
+	if service != nil {
+		service.SetAuthorizer(h.access)
+	}
 }
 
 func (h *BotHandler) SerializeEdit(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
 		h.editActionMu.Lock()
 		defer h.editActionMu.Unlock()
-		if update.CallbackQuery != nil {
+		if update.CallbackQuery != nil && update.CallbackQuery.Data != "ManageQueue" {
 			q := update.CallbackQuery
-			if q.Message.Message == nil || !h.ValidateEditSession(q.From.ID, q.Message.Message.Chat.ID, q.Message.Message.MessageThreadID, q.Message.Message.ID) || !h.validEditCallback(ctx, update) {
+			var ok bool
+			ctx, ok = h.NormalizeMenuCallback(ctx, update)
+			if !ok || q.Message.Message == nil || !h.menuCallbackMatches(ctx, update) || !h.validEditCallback(ctx, update) {
 				h.answer(ctx, b, q, "Кнопка устарела. Откройте меню заново")
 				return
 			}
@@ -229,11 +242,20 @@ func (h *BotHandler) validEditCallback(ctx context.Context, update *models.Updat
 	session := h.userState[query.From.ID]
 	h.stateMu.RUnlock()
 	menu := "schedule"
-	if parts[0] == "EditConfig" || parts[0] == "ConfigBack" || parts[0] == "ConfigLeave" {
+	if parts[0] == "EditConfig" || parts[0] == "ConfigBack" || parts[0] == "ConfigLeave" || strings.HasPrefix(parts[0], "Role") {
 		menu = "config"
+	}
+	if strings.HasPrefix(parts[0], "Moderation") {
+		menu = "moderation"
 	}
 	if session.menu != menu {
 		return false
+	}
+	if strings.HasPrefix(parts[0], "Moderation") {
+		return true
+	}
+	if strings.HasPrefix(parts[0], "Role") {
+		return query.From.ID == h.developerID
 	}
 	var index int
 	switch parts[0] {

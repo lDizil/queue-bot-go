@@ -49,7 +49,7 @@ func TestOpeningConfigReplacesPreviousSessionInTheSameTopic(t *testing.T) {
 	if session.menu != "config" || session.state != "" || session.chatID != -100 || session.threadID != 7 {
 		t.Fatalf("old edit state survived opening configuration: %+v", session)
 	}
-	if len(api.requests) != 2 || api.requests[0].method != "deleteMessage" || api.requests[1].method != "sendMessage" || api.requests[1].values["message_thread_id"] != "7" {
+	if len(api.requests) != 3 || api.requests[0].method != "deleteMessage" || api.requests[1].method != "sendMessage" || api.requests[1].values["message_thread_id"] != "7" || api.requests[2].method != "editEphemeralMessageText" {
 		t.Fatalf("configuration did not replace the previous menu in its topic: %+v", api.requests)
 	}
 }
@@ -232,7 +232,7 @@ func newConfigTestHandler(t *testing.T, menu string) (*BotHandler, *bot.Bot, *co
 	handler := &BotHandler{
 		settings:         manager,
 		developerID:      developerID,
-		adminIDs:         map[int64]bool{developerID: true},
+		access:           &testAccessControl{admins: map[int64]bool{developerID: true}},
 		userState:        map[int64]userState{developerID: {menu: menu, enteredAt: time.Now(), chatID: -100, threadID: 7}},
 		editMessages:     map[int64]int{developerID: 500},
 		editMessageChats: map[int64]int64{developerID: -100},
@@ -295,7 +295,12 @@ func (api *configTestAPI) Do(request *http.Request) (*http.Response, error) {
 		if messageID == 0 {
 			messageID = 500
 		}
-		result = map[string]any{"message_id": messageID, "chat": map[string]any{"id": -100}, "message_thread_id": 7}
+		message := map[string]any{"message_id": messageID, "chat": map[string]any{"id": -100}, "message_thread_id": 7}
+		if values["ephemeral_message_parameters"] != "" {
+			message["message_id"] = 0
+			message["ephemeral_message_id"] = messageID
+		}
+		result = message
 	}
 	body, err := json.Marshal(map[string]any{"ok": true, "result": result})
 	if err != nil {

@@ -12,12 +12,12 @@ import (
 func TestTelegramDispatchKeepsMenuAndFieldInputInOrder(t *testing.T) {
 	handler, telegram, _, store := newTelegramAdapter(t)
 	for i := range 32 {
-		field := adapterCallback(handler.developerID, "EditConfig:total_slots_in_queue")
+		field := privateAdapterCallback(handler.developerID, "EditConfig:total_slots_in_queue")
 		field.CallbackQuery.Message.Message.ID += i
 		processTelegramUpdates(t, handler, telegram,
-			&models.Update{Message: adapterMessage(handler.developerID, "/edit_config@QueueBot")},
+			&models.Update{Message: privateAdapterMessage(handler.developerID, "/edit_config@QueueBot")},
 			field,
-			&models.Update{Message: adapterMessage(handler.developerID, "31")})
+			&models.Update{Message: privateAdapterMessage(handler.developerID, "31")})
 		if got := handler.settings.Values().TotalSlotsInQueue; got != 31 {
 			t.Fatalf("field input overtook opening the menu: slots=%d", got)
 		}
@@ -30,15 +30,15 @@ func TestTelegramDispatchKeepsMenuAndFieldInputInOrder(t *testing.T) {
 func TestTelegramDispatchCancelsInputBeforeFollowingOrdinaryText(t *testing.T) {
 	handler, telegram, _, store := newTelegramAdapter(t)
 	for i := range 32 {
-		field := adapterCallback(handler.developerID, "EditConfig:total_slots_in_queue")
-		back := adapterCallback(handler.developerID, "ConfigBack")
+		field := privateAdapterCallback(handler.developerID, "EditConfig:total_slots_in_queue")
+		back := privateAdapterCallback(handler.developerID, "ConfigBack")
 		field.CallbackQuery.Message.Message.ID += i
 		back.CallbackQuery.Message.Message.ID += i
 		processTelegramUpdates(t, handler, telegram,
-			&models.Update{Message: adapterMessage(handler.developerID, "/edit_config")},
+			&models.Update{Message: privateAdapterMessage(handler.developerID, "/edit_config")},
 			field,
 			back,
-			&models.Update{Message: adapterMessage(handler.developerID, "31")})
+			&models.Update{Message: privateAdapterMessage(handler.developerID, "31")})
 	}
 	if store.saves != 0 || handler.settings.Values().TotalSlotsInQueue != 30 {
 		t.Fatalf("ordinary text changed configuration after Back: slots=%d saves=%d", handler.settings.Values().TotalSlotsInQueue, store.saves)
@@ -113,4 +113,17 @@ func processTelegramUpdates(t *testing.T, handler *BotHandler, telegram *bot.Bot
 			t.Fatalf("updates did not finish: %v", ctx.Err())
 		}
 	}
+}
+
+func privateAdapterMessage(userID int64, text string) *models.Message {
+	message := adapterMessage(userID, text)
+	message.Chat.ID = userID
+	message.MessageThreadID = 0
+	return message
+}
+func privateAdapterCallback(userID int64, data string) *models.Update {
+	update := adapterCallback(userID, data)
+	update.CallbackQuery.Message.Message.Chat.ID = userID
+	update.CallbackQuery.Message.Message.MessageThreadID = 0
+	return update
 }

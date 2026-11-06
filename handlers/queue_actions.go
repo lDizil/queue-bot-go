@@ -33,7 +33,7 @@ func (h *BotHandler) queueReference(ctx context.Context, b *bot.Bot, update *mod
 
 func (h *BotHandler) actor(user models.User) queue.Actor {
 	name := strings.Join(strings.Fields(user.FirstName+" "+user.LastName), " ")
-	return queue.Actor{ID: user.ID, Username: user.Username, DisplayName: name, Admin: h.adminIDs[user.ID]}
+	return queue.Actor{ID: user.ID, Username: user.Username, DisplayName: name}
 }
 
 func (h *BotHandler) JoinToPosition(ctx context.Context, b *bot.Bot, update *models.Update) {

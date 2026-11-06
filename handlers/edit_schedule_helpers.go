@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"log"
 	"queuebot/db"
 	"strconv"
 	"time"
@@ -120,34 +119,18 @@ func (h *BotHandler) isExpiredUserEditSes(timeForExpiredEditSes time.Duration) {
 	defer h.editActionMu.Unlock()
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
-	type expiredMenu struct {
-		chatID    int64
-		messageID int
-	}
-	var expired []expiredMenu
-	h.stateMu.Lock()
-	h.editMu.Lock()
+	var expired []int64
+	h.stateMu.RLock()
 	for userID, session := range h.userState {
-		if time.Since(session.enteredAt) <= timeForExpiredEditSes {
-			continue
+		if time.Since(session.enteredAt) > timeForExpiredEditSes {
+			expired = append(expired, userID)
 		}
-		expired = append(expired, expiredMenu{session.chatID, h.editMessages[userID]})
-		delete(h.userState, userID)
-		delete(h.editMessages, userID)
-		delete(h.editMessageChats, userID)
 	}
-	h.editMu.Unlock()
-	h.stateMu.Unlock()
-	if h.b == nil {
-		return
-	}
-	for _, menu := range expired {
+	h.stateMu.RUnlock()
+	for _, userID := range expired {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, err := h.b.EditMessageText(ctx, &bot.EditMessageTextParams{ChatID: menu.chatID, MessageID: menu.messageID, Text: "Сессия редактирования завершена по таймауту"})
+		_ = h.closeMenu(ctx, h.b, userID)
 		cancel()
-		if err != nil {
-			log.Printf("expire editing menu: %v", err)
-		}
 	}
 }
 
@@ -177,7 +160,7 @@ func (h *BotHandler) ValidateEditSession(userID, chatID int64, threadID, message
 	h.stateMu.Lock()
 	defer h.stateMu.Unlock()
 	session, ok := h.userState[userID]
-	if !ok || session.chatID != chatID || session.threadID != threadID || time.Since(session.enteredAt) > h.settings.Values().TimeForExpiredEditSes {
+	if messageID <= 0 || !ok || session.chatID != chatID || session.threadID != threadID || time.Since(session.enteredAt) > h.menuTimeout() {
 		return false
 	}
 	h.editMu.RLock()

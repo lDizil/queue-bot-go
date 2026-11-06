@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"queuebot/access"
 	"queuebot/db"
 	"queuebot/settings"
 	u "queuebot/utils"
@@ -22,7 +23,7 @@ var (
 	ErrNotJoined             = errors.New("вы не стоите в этой очереди")
 	ErrAlreadyJoined         = errors.New("вы уже заняли место в очереди")
 	ErrOccupied              = errors.New("место уже занято")
-	ErrForbidden             = errors.New("отмечать другого участника может только администратор")
+	ErrForbidden             = errors.New("недостаточно прав для действия с другим участником")
 	ErrChanged               = errors.New("участник уже сменил место; используйте обновлённые кнопки")
 	ErrFull                  = errors.New("все места в очереди заняты")
 	ErrPosition              = errors.New("место вне диапазона очереди")
@@ -31,6 +32,8 @@ var (
 )
 
 type Store interface {
+	GetStartupSchedules(context.Context) ([]db.Schedule, error)
+	RemoveQueueEntry(context.Context, int, time.Time, int) error
 	GetScheduleEntry(context.Context, int) (db.Schedule, error)
 	SyncQueueState(context.Context, int) (db.Schedule, error)
 	GetActiveScheduleByTopic(context.Context, int64, int) (db.Schedule, error)
@@ -69,7 +72,6 @@ type Actor struct {
 	ID          int64
 	Username    string
 	DisplayName string
-	Admin       bool
 }
 
 type Reference struct {
@@ -108,17 +110,18 @@ type messageCleanup struct {
 }
 
 type Service struct {
-	store     Store
-	settings  *settings.Manager
-	messenger Messenger
-	ctx       context.Context
-	cancel    context.CancelFunc
-	mu        sync.Mutex
-	states    map[int]*queueState
-	jobs      chan int
-	wg        sync.WaitGroup
-	now       func() time.Time
-	cooldowns map[int64]cooldown
+	store      Store
+	settings   *settings.Manager
+	messenger  Messenger
+	ctx        context.Context
+	cancel     context.CancelFunc
+	mu         sync.Mutex
+	states     map[int]*queueState
+	jobs       chan int
+	wg         sync.WaitGroup
+	now        func() time.Time
+	cooldowns  map[int64]cooldown
+	authorizer Authorizer
 }
 
 func NewService(ctx context.Context, store Store, cfg *settings.Manager, messenger Messenger) *Service {
@@ -746,8 +749,10 @@ func (s *Service) Complete(ctx context.Context, ref Reference, actor Actor, entr
 	if err != nil {
 		return false, err
 	}
-	if entry.UserID != actor.ID && !actor.Admin {
-		return false, ErrForbidden
+	if entry.UserID != actor.ID {
+		if err := s.authorize(ctx, actor.ID, access.MarkOthers); err != nil {
+			return false, err
+		}
 	}
 	if until, seen := state.seen[callbackID]; callbackID != "" && seen && until.After(s.now()) {
 		return entry.Completed, nil

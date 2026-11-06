@@ -3,7 +3,7 @@ module queuebot
 go 1.24.4
 
 require (
-	github.com/go-telegram/bot v1.19.0
+	github.com/go-telegram/bot v1.27.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/spf13/viper v1.21.0

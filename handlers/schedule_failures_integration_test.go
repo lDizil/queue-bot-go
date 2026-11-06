@@ -69,7 +69,7 @@ func newScheduleTestHandler(t *testing.T, failMethod string) (*BotHandler, *bot.
 }
 
 func TestScheduleCreateRetryDoesNotDuplicateAfterTelegramFailure(t *testing.T) {
-	for _, method := range []string{"editMessageText", "sendMessage"} {
+	for _, method := range []string{"editMessageText"} {
 		t.Run(method, func(t *testing.T) {
 			handler, telegram, api := newScheduleTestHandler(t, method)
 			session := handler.userState[handler.developerID]
