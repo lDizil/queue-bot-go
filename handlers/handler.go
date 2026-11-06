@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"log"
+	"queuebot/chats"
 	"queuebot/db"
 	"queuebot/dispatch"
 	"queuebot/queue"
@@ -28,14 +29,14 @@ type BotHandler struct {
 	stateMu sync.RWMutex
 	editMu  sync.RWMutex
 
-	configMu      sync.Mutex
-	editActionMu  sync.Mutex
-	settings      *settings.Manager
-	queues        *queue.Service
-	developerID   int64
-	adminIDs      map[int64]bool
-	defaultChatID int64
-	ctx           context.Context
+	configMu     sync.Mutex
+	editActionMu sync.Mutex
+	settings     *settings.Manager
+	queues       *queue.Service
+	developerID  int64
+	adminIDs     map[int64]bool
+	chats        *chats.Service
+	ctx          context.Context
 
 	totalSlotsInQueue  int
 	amountOfSlotsInRow int
@@ -81,13 +82,15 @@ func (h *BotHandler) SetBot(b *bot.Bot) {
 }
 
 type userState struct {
-	state      string
-	scheduleID int
-	enteredAt  time.Time
-	chatID     int64
-	threadID   int
-	menu       string
-	configKey  string
+	state        string
+	scheduleID   int
+	enteredAt    time.Time
+	chatID       int64
+	threadID     int
+	menu         string
+	configKey    string
+	targetChatID int64
+	chatSelected bool
 }
 
 func NewBotHandler(ctx context.Context, database *db.DBRepository, cfg *settings.Manager, developerID int64, adminIDs []int64) *BotHandler {
@@ -149,6 +152,19 @@ func (h *BotHandler) StateHandler(ctx context.Context, b *bot.Bot, update *model
 	h.stateMu.Unlock()
 
 	switch curState.state {
+	case "edit_start_time", "edit_end_time", "edit_thread_id", "edit_description", "edit_title":
+		if _, err := h.selectedSchedule(ctx, userID, curState.scheduleID); err != nil {
+			h.stateMu.Lock()
+			curState.state, curState.scheduleID = "", 0
+			h.userState[userID] = curState
+			h.stateMu.Unlock()
+			return
+		}
+	}
+
+	switch curState.state {
+	case "add_chat", "rename_chat":
+		h.HandleChatInput(ctx, b, update)
 	case "awaiting_schedule":
 		h.HandleScheduleInput(ctx, b, update)
 
@@ -184,8 +200,6 @@ func (h *BotHandler) getAllReplyInfo(update *models.Update) (*models.CallbackQue
 func (h *BotHandler) SetQueueService(service *queue.Service) {
 	h.queues = service
 }
-
-func (h *BotHandler) SetDefaultChatID(chatID int64) { h.defaultChatID = chatID }
 
 func (h *BotHandler) SerializeEdit(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -223,11 +237,33 @@ func (h *BotHandler) validEditCallback(ctx context.Context, update *models.Updat
 	}
 	var index int
 	switch parts[0] {
-	case "AddNewSchedule", "LeaveEditSchedule", "SetCurrentWeek", "EditConfig", "ConfigBack", "ConfigLeave":
-		return true
+	case "LeaveEditSchedule", "EditConfig", "ConfigBack", "ConfigLeave":
+		return len(parts) == 1 || parts[0] == "EditConfig"
+	case "AddChat", "ChatList":
+		return len(parts) == 1
+	case "ChatPage":
+		if len(parts) != 2 {
+			return false
+		}
+		page, err := strconv.Atoi(parts[1])
+		return err == nil && page >= 0
+	case "SelectChat", "AddNewSchedule", "RenameChat", "SetDefaultChat":
+		if len(parts) != 2 {
+			return false
+		}
+		target, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return false
+		}
+		if parts[0] == "SelectChat" {
+			return true
+		}
+		return session.chatSelected && target != 0 && target == session.targetChatID && (parts[0] != "SetDefaultChat" || query.From.ID == h.developerID)
+	case "SetCurrentWeek":
+		return session.chatSelected && len(parts) == 3
 	case "Back":
 		if len(parts) == 2 && parts[1] == "mainmenu" {
-			return true
+			return session.chatSelected
 		}
 		if len(parts) != 3 {
 			return false
@@ -250,7 +286,7 @@ func (h *BotHandler) validEditCallback(ctx context.Context, update *models.Updat
 	if err != nil {
 		return false
 	}
-	return query.Message.Message.Chat.ID > 0 || schedule.ChatID == query.Message.Message.Chat.ID
+	return session.chatSelected && schedule.ChatID == session.targetChatID
 }
 
 func (h *BotHandler) expireSessions(ctx context.Context) {

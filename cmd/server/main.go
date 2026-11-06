@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"queuebot/chats"
 	"queuebot/config"
 	"queuebot/db"
 	"queuebot/handlers"
@@ -66,7 +67,6 @@ func run() error {
 		return err
 	}
 	h := handlers.NewBotHandler(ctx, repository, manager, cfg.DeveloperUserID, adminIDs)
-	h.SetDefaultChatID(int64(cfg.ChatId))
 	b, err := h.NewTelegramBot(cfg.TelegramToken, bot.WithSkipGetMe(), bot.WithHTTPClient(30*time.Second, &http.Client{Timeout: 40 * time.Second}))
 	if err != nil {
 		return fmt.Errorf("initialize Telegram bot: %w", err)
@@ -90,6 +90,11 @@ func run() error {
 		return fmt.Errorf("initialize Telegram bot: %w", err)
 	}
 	h.SetBot(b)
+	chatService := chats.NewService(repository, handlers.NewChatReader(b, me.ID))
+	if err := chatService.Initialize(ctx, int64(cfg.ChatId)); err != nil {
+		return fmt.Errorf("initialize chats: %w", err)
+	}
+	h.SetChatService(chatService)
 	queues = queue.NewService(context.WithoutCancel(ctx), repository, manager, h)
 	h.SetQueueService(queues)
 	sched := scheduler.NewScheduler(ctx, repository, queues, manager)

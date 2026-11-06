@@ -19,6 +19,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"queuebot/chats"
 	"queuebot/db"
 )
 
@@ -43,6 +44,14 @@ func newScheduleTestHandler(t *testing.T, failMethod string) (*BotHandler, *bot.
 	t.Helper()
 	handler, _, _, _ := newConfigTestHandler(t, "schedule")
 	handler.db = scheduleTestRepository(t)
+	service := chats.NewService(handler.db, nil)
+	if err := service.Remember(t.Context(), -100, "Schedule test group"); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetChatService(service)
+	session := handler.userState[handler.developerID]
+	session.targetChatID, session.chatSelected = -100, true
+	handler.userState[handler.developerID] = session
 	api := &scheduleFaultAPI{failMethod: failMethod}
 	telegram, err := handler.NewTelegramBot("1:test", bot.WithSkipGetMe(), bot.WithHTTPClient(time.Second, api))
 	if err != nil {

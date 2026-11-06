@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"queuebot/db"
 	"queuebot/settings"
 	"queuebot/utils"
 
@@ -270,16 +269,6 @@ func (h *BotHandler) ToggleCurrentWeek(ctx context.Context, b *bot.Bot, update *
 		answerSettingsCallback(ctx, b, query.ID, "Кнопка устарела. Откройте /edit_schedule заново")
 		return
 	}
-	var schedules []db.Schedule
-	if h.db != nil {
-		var err error
-		schedules, err = h.schedulesInChat(ctx, message.Chat.ID)
-		if err != nil {
-			log.Println("Не удалось прочитать расписание перед сменой недели")
-			answerSettingsCallback(ctx, b, query.ID, "Не удалось обновить неделю. Повторите попытку")
-			return
-		}
-	}
 	now := time.Now()
 	err := h.settings.Update(ctx, func(values *settings.Values) error {
 		return setCurrentWeek(values, parts[1], parts[2], now)
@@ -306,7 +295,11 @@ func (h *BotHandler) ToggleCurrentWeek(ctx context.Context, b *bot.Bot, update *
 	h.stateMu.Lock()
 	h.userState[query.From.ID] = session
 	h.stateMu.Unlock()
-	text, markup := h.GenerateEditMessage(schedules)
+	text, markup, menuErr := h.selectedChatMenu(ctx, query.From.ID)
+	if menuErr != nil {
+		answerSettingsCallback(ctx, b, query.ID, status+". Откройте меню заново")
+		return
+	}
 	h.editConfigText(ctx, b, message.Chat.ID, message.ID, text, markup)
 	answerSettingsCallback(ctx, b, query.ID, status)
 }
